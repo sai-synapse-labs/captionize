@@ -15,163 +15,144 @@
 # OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 # DEALINGS IN THE SOFTWARE.
 
-import datetime
-import random
+"""
+Generate synthetic caption tasks for the Captionise subnet.
 
-from typing import List
+This module fetches synthetic data from the Hugging Face dataset 'facebook/voxpopuli'
+(for the 'en' configuration and train split), downloads the audio for a row,
+and enriches it with additional columns: job_id, job_status, job_accuracy, and audio_base64.
+The data is then inserted into the rqlite database (acting as a local DB) and returned as a dictionary.
+"""
 
-from faker import Faker
+import os
+import json
+import uuid
+import base64
+import requests
+import pandas as pd
+from datetime import datetime
 
-from reportlab.lib.pagesizes import letter
-from reportlab.pdfgen import canvas
-from reportlab.pdfbase import pdfmetrics
+from dotenv import load_dotenv
+from loguru import logger
 
-from captionize.validator.corrupt import corrupt_image
-from captionize.utils.image import load, serialize
+# Load environment variables from .env file if available
+load_dotenv()
 
-seed = 0
-fake = Faker()
-# Seed the Faker instance
-fake.seed_instance(seed)
+# Dataset endpoint for synthetic data
+DATASET_URL = "https://datasets-server.huggingface.co/first-rows?dataset=facebook%2Fvoxpopuli&config=en&split=train"
 
-# set random seed
-random.seed(seed)
+# rqlite configuration (should be set in your .env file)
+RQLITE_HTTP_ADDR = os.getenv("RQLITE_HTTP_ADDR", "127.0.0.1:4001")
+DB_BASE_URL = f"http://{RQLITE_HTTP_ADDR}"
+TABLE_NAME = "jobs"  # table name used in rqlite
 
-def apply_invoice_template(invoice_data: dict, path: str) -> List[dict]:
+def fetch_synthetic_data() -> dict:
     """
-    Generates an invoice from raw data and saves as pdf
-
-    Args:
-    - invoice_data (dict): contents of invoice
-    - path (str): path to save pdf file
-
+    Fetch the first few rows of the 'facebook/voxpopuli' dataset for the English configuration.
+    
     Returns:
-    - List[dict]: contents of invoice with text, position and font information for each section
+        dict: The JSON response from Hugging Face.
     """
-
-    c = canvas.Canvas(path, pagesize=letter)
-    w, h = c._pagesize
-    c.setLineWidth(.3)
-
-    font_name = random.choice(['Helvetica','Times-Roman'])
-    font_size = random.choice([10, 11, 12])
-    c.setFont(font_name, font_size)
-
-    data = []
-    def write_text(x, y, text):
-        c.drawString(x, y, text)
-        # scale x and y by the page size and estimate bounding box based on font size
-        # position = [x0, y0, x1, y1]
-        text_width = pdfmetrics.stringWidth(text, font_name, font_size)
-        position = [
-            x/w,
-            1 - (y - 0.2*font_size)/h,
-            (x + text_width)/w,
-            1 - (y + 0.8*font_size)/h
-        ]
-
-        data.append({'position': position, 'text': text, 'font': {'family': font_name, 'size': font_size}})
-
-    # Draw the invoice header
-    write_text(30, 750, invoice_data['company_name'])
-
-    write_text(400, 750, "Invoice Date: " + invoice_data['invoice_date'])
-    write_text(400, 735, "Invoice #: " + invoice_data['invoice_number'])
-
-    write_text(30, 735, invoice_data['company_address'])
-    write_text(30, 720, invoice_data['company_city_zip'])
-
-    # Draw the bill to section
-    write_text(30, 690, "Bill To:")
-    write_text(120, 690, invoice_data['customer_name'])
-
-    # Table headers
-    write_text(30, 650, "Description")
-    write_text(300, 650, "Qty")
-    write_text(460, 650, "Cost")
-    c.line(30, 645, 560, 645)
-
-    # List items
-    line_height = 625
-    total = 0
-    for item in invoice_data['items']:
-        write_text(30, line_height, item['desc'])
-        write_text(300, line_height, str(item['qty']))
-        write_text(460, line_height, "${:.2f}".format(item['cost']))
-        total += item['qty'] * item['cost']
-        line_height -= 15
-
-    # Draw the total cost
-    write_text(400, line_height - 15, f"Total: ${total:,.2f}" )
-
-    # Terms and Conditions
-    write_text(30, line_height - 45, "Terms:")
-    write_text(120, line_height - 45, invoice_data['terms'])
-
-    c.save()
+    response = requests.get(DATASET_URL)
+    response.raise_for_status()
+    data = response.json()
     return data
 
-
-def invoice(path: str, n_items: int=None, corrupt: bool=True) -> dict:
-    """Create a synthetic invoice and save as pdf
-
-    Args:
-        path (str): Path to save invoice document.
-        n_items (int): Number of items in document. Defaults to None.
-        corrupt (bool): Make the document harder to parse by adding noise etc.
-
-    Returns:
-        _type_: _description_
+def process_first_row(data: dict) -> dict:
     """
-
-    items_list = [
-        {"desc": "Web hosting", "cost": 100.00},
-        {"desc": "Domain registration", "cost": 10.00},
-        {"desc": "SSL certificate", "cost": 5.50},
-        {"desc": "Web design", "cost": 500.00},
-        {"desc": "Web development", "cost": 500.00},
-        {"desc": "SEO", "cost": 100.00},
-        {"desc": "Content creation", "cost": 300.00},
-        {"desc": "Social media marketing", "cost": 400.00},
-        {"desc": "Email marketing", "cost": 150.00},
-        {"desc": "PPC advertising", "cost": 200.00},
-        {"desc": "Analytics", "cost": 400.00},
-        {"desc": "Consulting", "cost": 700.00},
-        {"desc": "Training", "cost": 1200.00},
-        {"desc": "Maintenance", "cost": 650.00},
-        {"desc": "Support", "cost": 80.00},
-        {"desc": "Graphic design", "cost": 310.00},
-        {"desc": "Logo design", "cost": 140.00},
-        {"desc": "Branding", "cost": 750.00},
-    ]
-    if n_items is None:
-        n_items = random.randint(8, len(items_list))
-
-    def random_items(n):
-        items = sorted(random.sample(items_list, k=n), key=lambda x: x['desc'])
-        return [{**item, 'qty':random.randint(1,5)} for item in items]
-
-    # Sample data for the invoice
-    invoice_info = {
-        "company_name": fake.company(),
-        "company_address": fake.address(),
-        "company_city_zip": f'{fake.city()}, {fake.zipcode()}',
-        "company_phone": fake.phone_number(),
-        "customer_name": fake.name(),
-        "invoice_date": datetime.date.fromtimestamp(1700176424-random.random()*5e8).strftime("%B %d, %Y"),
-        "invoice_number": f"INV{random.randint(1,10000):06}",
-        "items": random_items(n_items),
-        "terms": f"Payment due within {random.choice([7, 14, 30, 60, 90])} days"
+    Process the first row of the fetched synthetic data to create a caption job.
+    
+    The function:
+      - Generates a unique job_id.
+      - Sets default job_status ("not_done") and job_accuracy (0.0).
+      - Extracts the audio file URL and downloads the audio.
+      - Encodes the audio into base64.
+      - Extracts the ground truth transcript (if available).
+    
+    Args:
+        data (dict): The JSON data fetched from Hugging Face.
+        
+    Returns:
+        dict: A dictionary representing the job with keys:
+              job_id, job_status, job_accuracy, audio_base64, transcript, created_at.
+    """
+    rows = data.get("rows", [])
+    if not rows:
+        raise ValueError("No rows returned from dataset")
+    
+    # Use the first row for demonstration
+    job_row = rows[0]
+    
+    job_id = str(uuid.uuid4())
+    job_status = "not_done"
+    job_accuracy = 0.0
+    
+    # Assume the row contains a "file" field with the audio URL and "text" field with transcript.
+    audio_url = job_row.get("audio/wav")
+    if not audio_url:
+        raise ValueError("No audio file URL found in the dataset row.")
+    
+    # Download the audio file
+    audio_response = requests.get(audio_url)
+    if audio_response.status_code != 200:
+        raise ValueError(f"Failed to download audio from {audio_url}")
+    audio_bytes = audio_response.content
+    audio_base64 = base64.b64encode(audio_bytes).decode("utf-8")
+    
+    transcript = job_row.get("normalized_text", "")
+    
+    # Create the job dictionary
+    job_dict = {
+        "job_id": job_id,
+        "job_status": job_status,
+        "job_accuracy": job_accuracy,
+        "base64_audio": audio_base64,
+        "transcript": transcript,
+        "created_at": datetime.utcnow().isoformat(),
     }
+    
+    return job_dict
 
-    # Use the function and pass the data and the filename you want to save as
-    data = apply_invoice_template(invoice_info, path)
+def insert_job_to_rqlite(job_dict: dict) -> None:
+    """
+    Insert the job dictionary into the rqlite database.
+    This uses rqlite's HTTP API with an INSERT OR IGNORE statement.
+    
+    Args:
+        job_dict (dict): The job information to insert.
+    """
+    insert_sql = f"""
+    INSERT OR IGNORE INTO {TABLE_NAME} 
+    (job_id, job_status, job_accuracy, base64_audio, transcript, created_at)
+    VALUES (
+        '{job_dict["job_id"]}', 
+        '{job_dict["job_status"]}', 
+        {job_dict["job_accuracy"]}, 
+        '{job_dict["base64_audio"]}', 
+        '{job_dict["transcript"]}', 
+        '{job_dict["created_at"]}'
+    );
+    """
+    url = f"{DB_BASE_URL}/db/exec"
+    payload = {"statements": [insert_sql]}
+    response = requests.post(url, json=payload)
+    response.raise_for_status()
+    logger.info(f"Job {job_dict['job_id']} inserted into rqlite database.")
 
-    # overwrite image file with corrupted version
-    if corrupt:
-        corrupt_image(path, path)
+def generate_synthetic_job() -> dict:
+    """
+    Generate a synthetic caption job by fetching synthetic data,
+    processing a row, and inserting the job into the rqlite database.
+    
+    Returns:
+        dict: The job dictionary.
+    """
+    data = fetch_synthetic_data()
+    job_dict = process_first_row(data)
+    insert_job_to_rqlite(job_dict)
+    return job_dict
 
-    image = load(path)
-    base64_image = serialize(image)
-
-    return {'image':image, 'labels':data, 'path':path, 'base64_image': base64_image}
+if __name__ == "__main__":
+    job = generate_synthetic_job()
+    print("Generated Synthetic Job:")
+    print(json.dumps(job, indent=2))
