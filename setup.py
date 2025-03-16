@@ -53,7 +53,7 @@ with open(path.join(here, "README.md"), encoding="utf-8") as f:
 
 # loading version from setup.py
 with codecs.open(
-    os.path.join(here, "ocr_subnet/__init__.py"), encoding="utf-8"
+    os.path.join(here, "captionize/__init__.py"), encoding="utf-8"
 ) as init_file:
     version_match = re.search(
         r"^__version__ = ['\"]([^'\"]*)['\"]", init_file.read(), re.M
@@ -61,18 +61,18 @@ with codecs.open(
     version_string = version_match.group(1)
 
 setup(
-    name="ocr_subnet",
+    name="captionise_subnet",
     version=version_string,
-    description="Bittensor OCR subnet tutorial",
+    description="Bittensor captionise subnet",
     long_description=long_description,
     long_description_content_type="text/markdown",
-    url="https://github.com/steffencruz/ocr_subnet",
-    author="bittensor.com",  
+    url="https://github.com/sai-synapse-labs/captionise",
+    author="sai-synapse-labs",  
     packages=find_packages(),
     include_package_data=True,
     author_email="", 
     license="MIT",
-    python_requires=">=3.8",
+    python_requires=">=3.10",
     install_requires=requirements,
     classifiers=[
         "Development Status :: 3 - Alpha",

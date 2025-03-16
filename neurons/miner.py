@@ -21,10 +21,10 @@ import bittensor as bt
 import pytesseract
 
 # Bittensor OCR Miner
-import ocr_subnet
+import captionize
 
 # import base miner class which takes care of most of the boilerplate
-from ocr_subnet.base.miner import BaseMinerNeuron
+from captionize.base.miner import BaseMinerNeuron
 
 
 class Miner(BaseMinerNeuron):
@@ -45,8 +45,8 @@ class Miner(BaseMinerNeuron):
 
 
     async def forward(
-        self, synapse: ocr_subnet.protocol.OCRSynapse
-    ) -> ocr_subnet.protocol.OCRSynapse:
+        self, synapse: captionize.protocol.OCRSynapse
+    ) -> captionize.protocol.OCRSynapse:
         """
         Processes the incoming OCR synapse and attaches the response to the synapse.
 
@@ -58,7 +58,7 @@ class Miner(BaseMinerNeuron):
 
         """
         # Get image data
-        image = ocr_subnet.utils.image.deserialize(base64_string=synapse.base64_image)
+        image = captionize.utils.image.deserialize(base64_string=synapse.base64_image)
 
         # Use pytesseract to get the data
         data = pytesseract.image_to_data(image, output_type=pytesseract.Output.DICT)
@@ -81,7 +81,7 @@ class Miner(BaseMinerNeuron):
                 response.append(entry)
 
         # Merge together words into sections, which are on the same line (same y value) and are close together (small distance in x)
-        response = ocr_subnet.utils.process.group_and_merge_boxes(response)
+        response = captionize.utils.process.group_and_merge_boxes(response)
 
         # Sort sections by y, then sort by x so that they read left to right and top to bottom
         response = sorted(response, key=lambda item: (item['position'][1], item['position'][0]))
@@ -92,7 +92,7 @@ class Miner(BaseMinerNeuron):
         return synapse
 
     async def blacklist(
-        self, synapse: ocr_subnet.protocol.OCRSynapse
+        self, synapse: captionize.protocol.OCRSynapse
     ) -> typing.Tuple[bool, str]:
         """
         Determines whether an incoming request should be blacklisted and thus ignored. Your implementation should
@@ -136,7 +136,7 @@ class Miner(BaseMinerNeuron):
         )
         return False, "Hotkey recognized!"
 
-    async def priority(self, synapse: ocr_subnet.protocol.OCRSynapse) -> float:
+    async def priority(self, synapse: captionize.protocol.OCRSynapse) -> float:
         """
         The priority function determines the order in which requests are handled. More valuable or higher-priority
         requests are processed before others. You should design your own priority mechanism with care.
