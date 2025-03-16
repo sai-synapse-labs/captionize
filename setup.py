@@ -61,12 +61,12 @@ with codecs.open(
     version_string = version_match.group(1)
 
 setup(
-    name="captionise_subnet",
+    name="captionize_subnet",
     version=version_string,
-    description="Bittensor captionise subnet",
+    description="Bittensor captionize subnet",
     long_description=long_description,
     long_description_content_type="text/markdown",
-    url="https://github.com/sai-synapse-labs/captionise",
+    url="https://github.com/sai-synapse-labs/captionize",
     author="sai-synapse-labs",  
     packages=find_packages(),
     include_package_data=True,

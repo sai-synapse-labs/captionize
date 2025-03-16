@@ -23,6 +23,8 @@ import pytesseract
 # Bittensor OCR Miner
 import captionize
 
+from dotenv import load_dotenv
+
 # import base miner class which takes care of most of the boilerplate
 from captionize.base.miner import BaseMinerNeuron
 

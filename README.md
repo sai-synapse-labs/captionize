@@ -21,6 +21,7 @@
   - [Code from notebook](#code-from-notebook)
 - [Preparing to run the OCR subnet](#preparing-to-run-the-ocr-subnet)
 - [Running the OCR subnet](#running-the-ocr-subnet)
+- [RQLITE status](#rqlite-status)
 - [License](#license)
 
 ---
@@ -131,6 +132,13 @@ Before you proceed with the installation and running of the subnet, note the fol
 - **Running on Bittensor mainnet**: Follow the step-by-step instructions described in this section: [Running on the Main Network](./docs/running_on_mainnet.md).
 
 ---
+
+
+## RQLITE status
+```tail -f rqlite.log```
+```curl http://127.0.0.1:4001/status```
+
+
 
 ## License
 This repository is licensed under the MIT License.
