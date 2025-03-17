@@ -60,7 +60,8 @@ class Validator(BaseValidatorNeuron):
           6. Update miner scores.
         """
         # Get random miner UIDs from the metagraph (helper function)
-        miner_uids = get_random_uids(self, k=min(self.config.neuron.sample_size, self.metagraph.n.item()))
+        # miner_uids = get_random_uids(self, k=min(self.config.neuron.sample_size, self.metagraph.n.item()))
+        miner_uids = get_random_uids(self, k=min(self.config.neuron.sample_size, len(self.metagraph.uids)))
         
         # Generate a synthetic caption job from VoxPopuli
         job_data = generate_synthetic_job()
