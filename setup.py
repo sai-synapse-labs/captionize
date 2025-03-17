@@ -18,7 +18,6 @@
 import re
 import os
 import codecs
-import pathlib
 from os import path
 from io import open
 from setuptools import setup, find_packages
@@ -81,8 +80,6 @@ setup(
         # Pick your license as you wish
         "License :: OSI Approved :: MIT License",
         "Programming Language :: Python :: 3 :: Only",
-        "Programming Language :: Python :: 3.8",
-        "Programming Language :: Python :: 3.9",
         "Programming Language :: Python :: 3.10",
         "Topic :: Scientific/Engineering",
         "Topic :: Scientific/Engineering :: Mathematics",
