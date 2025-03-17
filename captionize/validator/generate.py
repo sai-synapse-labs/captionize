@@ -47,6 +47,7 @@ load_dotenv()
 RQLITE_HTTP_ADDR = os.getenv("RQLITE_HTTP_ADDR", "127.0.0.1:4001")
 DB_BASE_URL = f"http://{RQLITE_HTTP_ADDR}"
 TABLE_NAME = "jobs"
+DATASET_URL= "https://datasets-server.huggingface.co/rows?dataset=facebook%2Fvoxpopuli&config=en&split=train&offset=0&length=100"
 
 def load_voxpopuli_data() -> any:
     """
@@ -55,9 +56,14 @@ def load_voxpopuli_data() -> any:
     Returns:
         dataset: A Hugging Face Dataset object for the 'en' configuration (train split).
     """
-    dataset = load_dataset("facebook/voxpopuli", "en", split="train")
-    bt.logging.info(f"Loaded VoxPopuli dataset with {len(dataset)} examples.")
-    return dataset
+    # dataset = load_dataset("facebook/voxpopuli", "en", split="train")
+    # bt.logging.info(f"Loaded VoxPopuli dataset with {len(dataset)} examples.")
+    # return dataset
+    response = requests.get(DATASET_URL)
+    response.raise_for_status()
+    data = response.json()
+    bt.logging.info(f"Fetched data: {json.dumps(data, indent=2)}")
+    return data
 
 def process_example(data: dict) -> dict:
     """
@@ -77,7 +83,11 @@ def process_example(data: dict) -> dict:
     if not rows:
         raise ValueError("No rows returned from dataset")
     
-    job_row = rows[0]
+    # Get a random row index
+    num_rows = len(rows)
+    if num_rows == 0:
+        raise ValueError("No rows available in dataset")
+    job_row = rows[random.randint(0, num_rows - 1)]
     job_id = str(uuid.uuid4())
     job_status = "not_done"
     job_accuracy = 0.0
