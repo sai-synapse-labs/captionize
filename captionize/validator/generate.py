@@ -92,19 +92,24 @@ def process_example(data: dict) -> dict:
     job_status = "not_done"
     job_accuracy = 0.0
 
-    # Assume 'audio' contains a 'path' to the local audio file.
-    audio_info = job_row.get("audio", {})
-    audio_path = audio_info.get("src")
-    if not audio_path or not os.path.exists(audio_path):
-        bt.logging.error("Audio file path not available or file does not exist.")
-        raise ValueError("Audio file not available")
-    
-    # Read the audio file and encode it in base64.
-    with open(audio_path, "rb") as f:
-        audio_bytes = f.read()
+    # Get audio URL from the audio array
+    audio_array = job_row.get("audio", [])
+    if not audio_array:
+        bt.logging.error("No audio URLs available in job row")
+        raise ValueError("Audio URLs not available")
+        
+    audio_url = audio_array[0].get("src")
+    if not audio_url:
+        bt.logging.error("Audio URL not found in first audio entry")
+        raise ValueError("Audio URL not available")
+
+    # Download audio from URL and encode in base64
+    audio_response = requests.get(audio_url)
+    audio_response.raise_for_status()
+    audio_bytes = audio_response.content
     audio_base64 = base64.b64encode(audio_bytes).decode("utf-8")
     
-     # Save audio locally for models that require a file path
+    # Save audio locally for models that require a file path
     local_audio_path = os.path.join("assets", "synthetic_audio", f"{job_id}.wav")
     os.makedirs(os.path.dirname(local_audio_path), exist_ok=True)
     with open(local_audio_path, "wb") as f:
@@ -166,7 +171,8 @@ def generate_synthetic_job() -> dict:
     random_index = random.randint(0, len(dataset) - 1)
     example = dataset[random_index]
     job_dict = process_example(example)
-    insert_job_to_rqlite(job_dict)
+    # insert_job_to_rqlite(job_dict)
+    bt.logging.debug(f"Generated job: {job_dict}")
     return job_dict
 
 if __name__ == "__main__":
