@@ -18,20 +18,16 @@ echo "Using RQLITE_DATA_DIR: $RQLITE_DATA_DIR"
 echo "Using RQLITE HTTP PORT: $RQLITE_HTTP_PORT"
 echo "Using RQLITE NODE PORT: $RQLITE_NODE_PORT"
 
-# Check if rqlited is installed
+# Check if rqlited is installed; if not, download and install it.
 if ! command -v rqlited &> /dev/null; then
     echo "rqlited not found. Installing rqlite..."
-    # Download rqlite (adjust URL and version as needed)
-    curl -L https://github.com/rqlite/rqlite/releases/download/v8.36.3/rqlite-v8.36.3-linux-amd64.tar.gz -o rqlite-v8.36.3-linux-amd64.tar.gz
-    tar xvfz rqlite-v8.36.3-linux-amd64.tar.gz --no-same-owner
-    # Move binaries to ~/bin (make sure ~/bin exists)
+    curl -L https://github.com/rqlite/rqlite/releases/download/v8.36.3/rqlite-v8.36.3-linux-amd64.tar.gz -o rqlite.tar.gz
+    tar xvfz rqlite.tar.gz --no-same-owner
     mkdir -p "$HOME/bin"
-    sudo mv rqlite-v8.36.3-linux-amd64/rqlited "$HOME/bin/"
-    sudo mv rqlite-v8.36.3-linux-amd64/rqlite "$HOME/bin/"
-    # Clean up downloaded files
-    rm -rf rqlite-v8.36.3-linux-amd64* 
+    cp rqlite-v8.36.3-linux-amd64/rqlite* "$HOME/bin/"
+    rm -rf rqlite-v8.36.3-linux-amd64* rqlite.tar.gz
 
-    # Add $HOME/bin to PATH if not already present
+    # Add $HOME/bin to PATH if it's not already in PATH
     if [[ ":$PATH:" != *":$HOME/bin:"* ]]; then
         echo 'export PATH=$PATH:$HOME/bin' >> ~/.bashrc
         export PATH="$PATH:$HOME/bin"
@@ -39,10 +35,10 @@ if ! command -v rqlited &> /dev/null; then
     fi
 fi
 
-# Create data directory if it doesn't exist
+# Create the data directory if it doesn't exist
 mkdir -p "$RQLITE_DATA_DIR"
 
-# Start rqlited in the background
+# Start rqlited in the background, logging to rqlite.log
 echo "Starting rqlited..."
 nohup rqlited -http-addr "0.0.0.0:$RQLITE_HTTP_PORT" -node-addr "0.0.0.0:$RQLITE_NODE_PORT" "$RQLITE_DATA_DIR" > rqlite.log 2>&1 &
 echo "rqlited started. Logs available in rqlite.log"
