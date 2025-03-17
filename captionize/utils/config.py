@@ -126,19 +126,7 @@ def add_args(cls, parser):
             default=10,
         )
         
-        parser.add_argument(
-            "--neuron.metagraph_resync_length",
-            type=int,
-            help="The number of blocks until metagraph is resynced.",
-            default=100,
-        )
-
-        parser.add_argument(
-            "--neuron.epoch_length",
-            type=int,
-            help="The default epoch length (how often we set weights, measured in 12 second blocks).",
-            default=150,
-        )
+        
 
         parser.add_argument(
             "--neuron.disable_set_weights",

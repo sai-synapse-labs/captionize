@@ -28,4 +28,4 @@ from . import protocol
 from . import base
 from . import validator
 from . import utils
-from . import model
+# from . import model
