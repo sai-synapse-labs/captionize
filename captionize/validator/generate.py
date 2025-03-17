@@ -55,7 +55,7 @@ def load_voxpopuli_data() -> dict:
     response = requests.get(DATASET_URL)
     response.raise_for_status()
     data = response.json()
-    bt.logging.info(f"Fetched data: {json.dumps(data, indent=2)}")
+    bt.logging.debug(f"Fetched data: {json.dumps(data, indent=2)}")
     return data
 
 def process_example(data: dict) -> dict:
@@ -98,14 +98,16 @@ def process_example(data: dict) -> dict:
     # Download audio from URL and encode in base64
     audio_response = requests.get(audio_url)
     audio_response.raise_for_status()
-    audio_bytes = audio_response.content
-    audio_base64 = base64.b64encode(audio_bytes).decode("utf-8")
+    
+    # audio_bytes = audio_response.content
+    # audio_base64 = base64.b64encode(audio_bytes).decode("utf-8")
+    audio_base64 = base64.b64encode(open("audio.wav", "rb").read()).decode()
     
     # Save audio locally for models that require a file path
-    local_audio_path = os.path.join("assets", "synthetic_audio", f"{job_id}.wav")
-    os.makedirs(os.path.dirname(local_audio_path), exist_ok=True)
-    with open(local_audio_path, "wb") as f:
-        f.write(audio_bytes)
+    # local_audio_path = os.path.join("assets", "synthetic_audio", f"{job_id}.wav")
+    # os.makedirs(os.path.dirname(local_audio_path), exist_ok=True)
+    # with open(local_audio_path, "wb") as f:
+    #     f.write(audio_bytes)
 
     transcript = job_row.get("normalized_text", "")
     gender = job_row.get("gender", "")
@@ -115,8 +117,9 @@ def process_example(data: dict) -> dict:
         "job_id": job_id,
         "job_status": job_status,
         "job_accuracy": job_accuracy,
+        "audio_response": audio_response,
         "base64_audio": audio_base64,
-        "audio_path": local_audio_path,
+        # "audio_path": local_audio_path,
         "transcript": transcript,
         "gender": gender,
         "created_at": created_at
