@@ -16,120 +16,124 @@
 # DEALINGS IN THE SOFTWARE.
 
 """
-Generate synthetic caption tasks for the Captionise subnet.
+Generate synthetic caption tasks for the Captionise subnet using VoxPopuli.
 
-This module fetches synthetic data from the Hugging Face dataset 'facebook/voxpopuli'
-(for the 'en' configuration and train split), downloads the audio for a row,
-and enriches it with additional columns: job_id, job_status, job_accuracy, and audio_base64.
-The data is then inserted into the rqlite database (acting as a local DB) and returned as a dictionary.
+This module:
+  - Loads the VoxPopuli dataset for English (train split) using Hugging Face's datasets library.
+  - Selects a random example.
+  - Downloads and encodes the associated audio file in base64.
+  - Enriches the data with additional columns: job_id, job_status, job_accuracy, created_at.
+  - Inserts the job into a rqlite database (via its HTTP API).
+  - Returns the job dictionary.
 """
 
 import os
-import json
 import uuid
 import base64
-import requests
-import pandas as pd
+import random
+import json
+import bittensor as bt
 from datetime import datetime
 
+import requests
+from datasets import load_dataset
 from dotenv import load_dotenv
-from loguru import logger
 
-# Load environment variables from .env file if available
+
+# Load environment variables from .env file
 load_dotenv()
 
-# Dataset endpoint for synthetic data
-DATASET_URL = "https://datasets-server.huggingface.co/first-rows?dataset=facebook%2Fvoxpopuli&config=en&split=train"
-
-# rqlite configuration (should be set in your .env file)
+# rqlite configuration (ensure these are set in your .env)
 RQLITE_HTTP_ADDR = os.getenv("RQLITE_HTTP_ADDR", "127.0.0.1:4001")
 DB_BASE_URL = f"http://{RQLITE_HTTP_ADDR}"
-TABLE_NAME = "jobs"  # table name used in rqlite
+TABLE_NAME = "jobs"
 
-def fetch_synthetic_data() -> dict:
+def load_voxpopuli_data() -> any:
     """
-    Fetch the first few rows of the 'facebook/voxpopuli' dataset for the English configuration.
+    Load the VoxPopuli dataset for English using Hugging Face's datasets library.
     
     Returns:
-        dict: The JSON response from Hugging Face.
+        dataset: A Hugging Face Dataset object for the 'en' configuration (train split).
     """
-    response = requests.get(DATASET_URL)
-    response.raise_for_status()
-    data = response.json()
-    return data
+    dataset = load_dataset("facebook/voxpopuli", "en", split="train")
+    bt.logging.info(f"Loaded VoxPopuli dataset with {len(dataset)} examples.")
+    return dataset
 
-def process_first_row(data: dict) -> dict:
+def process_example(data: dict) -> dict:
     """
-    Process the first row of the fetched synthetic data to create a caption job.
+    Process a single VoxPopuli example into a job dictionary.
     
-    The function:
-      - Generates a unique job_id.
-      - Sets default job_status ("not_done") and job_accuracy (0.0).
-      - Extracts the audio file URL and downloads the audio.
-      - Encodes the audio into base64.
-      - Extracts the ground truth transcript (if available).
+    Expected fields in the example:
+      - "audio": A dict containing an audio file path.
+      - "normalized_text": The transcript of the audio.
+      - "gender": The gender of the speaker.
     
-    Args:
-        data (dict): The JSON data fetched from Hugging Face.
-        
     Returns:
-        dict: A dictionary representing the job with keys:
-              job_id, job_status, job_accuracy, audio_base64, transcript, created_at.
+        dict: Job information with keys:
+              job_id, job_status, job_accuracy, base64_audio, miner_transcript, created_at.
     """
+    
     rows = data.get("rows", [])
     if not rows:
         raise ValueError("No rows returned from dataset")
     
-    # Use the first row for demonstration
     job_row = rows[0]
-    
     job_id = str(uuid.uuid4())
     job_status = "not_done"
     job_accuracy = 0.0
+
+    # Assume 'audio' contains a 'path' to the local audio file.
+    audio_info = job_row.get("audio", {})
+    audio_path = audio_info.get("src")
+    if not audio_path or not os.path.exists(audio_path):
+        bt.logging.error("Audio file path not available or file does not exist.")
+        raise ValueError("Audio file not available")
     
-    # Assume the row contains a "file" field with the audio URL and "text" field with transcript.
-    audio_url = job_row.get("audio/wav")
-    if not audio_url:
-        raise ValueError("No audio file URL found in the dataset row.")
-    
-    # Download the audio file
-    audio_response = requests.get(audio_url)
-    if audio_response.status_code != 200:
-        raise ValueError(f"Failed to download audio from {audio_url}")
-    audio_bytes = audio_response.content
+    # Read the audio file and encode it in base64.
+    with open(audio_path, "rb") as f:
+        audio_bytes = f.read()
     audio_base64 = base64.b64encode(audio_bytes).decode("utf-8")
     
+     # Save audio locally for models that require a file path
+    local_audio_path = os.path.join("assets", "synthetic_audio", f"{job_id}.wav")
+    os.makedirs(os.path.dirname(local_audio_path), exist_ok=True)
+    with open(local_audio_path, "wb") as f:
+        f.write(audio_bytes)
+
     transcript = job_row.get("normalized_text", "")
-    
-    # Create the job dictionary
+    gender = job_row.get("gender", "")
+    created_at = datetime.utcnow().isoformat()
+
     job_dict = {
         "job_id": job_id,
         "job_status": job_status,
         "job_accuracy": job_accuracy,
         "base64_audio": audio_base64,
+        "audio_path": local_audio_path,
         "transcript": transcript,
-        "created_at": datetime.utcnow().isoformat(),
+        "gender": gender,
+        "created_at": created_at
     }
-    
+    bt.logging.info(f"Processed job {job_id} from example.")
     return job_dict
 
 def insert_job_to_rqlite(job_dict: dict) -> None:
     """
-    Insert the job dictionary into the rqlite database.
-    This uses rqlite's HTTP API with an INSERT OR IGNORE statement.
+    Insert the job dictionary into the rqlite database using its HTTP API.
     
     Args:
         job_dict (dict): The job information to insert.
     """
     insert_sql = f"""
     INSERT OR IGNORE INTO {TABLE_NAME} 
-    (job_id, job_status, job_accuracy, base64_audio, transcript, created_at)
+    (job_id, job_status, job_accuracy, base64_audio, transcript, gender, created_at)
     VALUES (
         '{job_dict["job_id"]}', 
         '{job_dict["job_status"]}', 
         {job_dict["job_accuracy"]}, 
         '{job_dict["base64_audio"]}', 
         '{job_dict["transcript"]}', 
+        '{job_dict["gender"]}',
         '{job_dict["created_at"]}'
     );
     """
@@ -137,22 +141,28 @@ def insert_job_to_rqlite(job_dict: dict) -> None:
     payload = {"statements": [insert_sql]}
     response = requests.post(url, json=payload)
     response.raise_for_status()
-    logger.info(f"Job {job_dict['job_id']} inserted into rqlite database.")
+    bt.logging.info(f"Job {job_dict['job_id']} inserted into rqlite database.")
 
 def generate_synthetic_job() -> dict:
     """
-    Generate a synthetic caption job by fetching synthetic data,
-    processing a row, and inserting the job into the rqlite database.
-    
-    Returns:
-        dict: The job dictionary.
+    Generate a synthetic caption job:
+      - Loads VoxPopuli dataset (English, train split).
+      - Selects a random example.
+      - Processes the example into a job dictionary.
+      - Inserts the job into rqlite.
+      - Returns the job dictionary.
     """
-    data = fetch_synthetic_data()
-    job_dict = process_first_row(data)
+    dataset = load_voxpopuli_data()
+    random_index = random.randint(0, len(dataset) - 1)
+    example = dataset[random_index]
+    job_dict = process_example(example)
     insert_job_to_rqlite(job_dict)
     return job_dict
 
 if __name__ == "__main__":
-    job = generate_synthetic_job()
-    print("Generated Synthetic Job:")
-    print(json.dumps(job, indent=2))
+    try:
+        job = generate_synthetic_job()
+        print("Generated Synthetic Job:")
+        print(json.dumps(job, indent=2))
+    except Exception as e:
+        bt.logging.error(f"Error generating synthetic job: {e}")

@@ -21,10 +21,9 @@ import torch
 import unittest
 import bittensor as bt
 
-from neurons.validator import Neuron as Validator
-from neurons.miner import Neuron as Miner
+from neurons.validator import Validator 
 
-from captionize.protocol import Dummy
+from captionize.protocol import CaptionSynapse
 from captionize.validator.forward import forward
 from captionize.utils.uids import get_random_uids
 from captionize.validator.reward import get_rewards

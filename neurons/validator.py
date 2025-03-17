@@ -20,80 +20,79 @@ import time
 import hashlib
 import bittensor as bt
 
-import captionize
-
-# import base validator class which takes care of most of the boilerplate
+import captionize  # our project package
 from captionize.base.validator import BaseValidatorNeuron
-
+from captionize.validator.generate import generate_synthetic_job
+from captionize.validator.reward import get_rewards
+from captionize.utils.uids import get_random_uids
 
 class Validator(BaseValidatorNeuron):
     """
-    OCR validator neuron class.
-
-    This class inherits from the BaseValidatorNeuron class, which in turn inherits from BaseNeuron. The BaseNeuron class takes care of routine tasks such as setting up wallet, subtensor, metagraph, logging directory, parsing config, etc. You can override any of the methods in BaseNeuron if you need to customize the behavior.
-
-    This class provides reasonable default behavior for a validator such as keeping a moving average of the scores of the miners and using them to set weights at the end of each epoch. Additionally, the scores are reset for new hotkeys at the end of each epoch.
+    Captionise validator neuron class.
+    
+    This class inherits from BaseValidatorNeuron, which handles wallet, subtensor, metagraph,
+    logging, and configuration. The Validator:
+      - Generates a synthetic caption job from the VoxPopuli dataset.
+      - Dispatches the task to miners via a CaptionSynapse.
+      - Collects miner responses and scores them.
+      - Updates miner scores accordingly.
     """
-
     def __init__(self, config=None):
         super(Validator, self).__init__(config=config)
-
-        bt.logging.info("load_state()")
+        bt.logging.info("Loading validator state...")
         self.load_state()
-
-        self.image_dir = './data/images/'
-        if not os.path.exists(self.image_dir):
-            os.makedirs(self.image_dir)
-
+        
+        # Define a directory for storing temporary data (if needed)
+        self.data_dir = './data/audio/'
+        if not os.path.exists(self.data_dir):
+            os.makedirs(self.data_dir)
 
     async def forward(self):
         """
-        The forward function is called by the validator every time step.
-
-        It consists of 3 important steps:
-        - Generate a challenge for the miners (in this case it creates a synthetic invoice image)
-        - Query the miners with the challenge
-        - Score the responses from the miners
-
-        Args:
-            self (:obj:`bittensor.neuron.Neuron`): The neuron object which contains all the necessary state for the validator.
-
+        Called periodically by the validator.
+        
+        Steps:
+          1. Retrieve random miner UIDs.
+          2. Generate a synthetic caption job using VoxPopuli.
+          3. Create a CaptionSynapse with the generated job data.
+          4. Query miners with this synapse.
+          5. Score the responses.
+          6. Update miner scores.
         """
-
-        # get_random_uids is an example method, but you can replace it with your own.
-        miner_uids = captionize.utils.uids.get_random_uids(self, k=min(self.config.neuron.sample_size, self.metagraph.n.item()))
-
-        # make a hash from the timestamp
-        filename = hashlib.md5(str(time.time()).encode()).hexdigest()
-
-        # Create a random image and load it.
-        image_data = captionize.validator.generate.invoice(path=os.path.join(self.image_dir, f"{filename}.pdf"), corrupt=True)
-
-        # Create synapse object to send to the miner and attach the image.
-        synapse = captionize.protocol.OCRSynapse(base64_image = image_data['base64_image'])
-
-        # The dendrite client queries the network.
-        responses = self.dendrite.query(
-            # Send the query to selected miner axons in the network.
-            axons=[self.metagraph.axons[uid] for uid in miner_uids],
-            # Pass the synapse to the miner.
-            synapse=synapse,
-            # Do not deserialize the response so that we have access to the raw response.
-            deserialize=False,
+        # Get random miner UIDs from the metagraph (helper function)
+        miner_uids = get_random_uids(self, k=min(self.config.neuron.sample_size, self.metagraph.n.item()))
+        
+        # Generate a synthetic caption job from VoxPopuli
+        job_data = generate_synthetic_job()
+        
+        # For scoring, create ground-truth labels using the transcript.
+        # Here, we wrap the transcript in a list of one segment with a default gender.
+        labels = [{"start_time": 0.0, "end_time": 0.0, "text": job_data["transcript"], "gender": "unknown"}]
+        
+        # Create a CaptionSynapse with the job data.
+        synapse = captionize.protocol.CaptionSynapse(
+            job_id=job_data["job_id"],
+            base64_audio=job_data["base64_audio"],
+            audio_path=job_data["audio_path"],
+            language="en"
         )
-
-        # Log the results for monitoring purposes.
+        
+        # Query miners with the synapse. Assume dendrite.query returns a list of responses.
+        responses = self.dendrite.query(
+            axons=[self.metagraph.axons[uid] for uid in miner_uids],
+            synapse=synapse,
+            deserialize=False,  # we want the raw response for further processing
+        )
+        
         bt.logging.info(f"Received responses: {responses}")
-
-        rewards = captionize.validator.reward.get_rewards(self, labels=image_data['labels'], responses=responses)
-
+        
+        # Compute rewards for the miner responses
+        rewards = get_rewards(self, labels=labels, responses=responses)
         bt.logging.info(f"Scored responses: {rewards}")
-
-        # Update the scores based on the rewards. You may want to define your own update_scores function for custom behavior.
+        
+        # Update miner scores using the computed rewards (update_scores must be implemented in BaseValidatorNeuron)
         self.update_scores(rewards, miner_uids)
 
-
-# The main function parses the configuration and runs the validator.
 if __name__ == "__main__":
     with Validator() as validator:
         while True:

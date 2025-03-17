@@ -19,188 +19,143 @@ import torch
 import bittensor as bt
 from typing import List
 import editdistance
-
 from scipy.optimize import linear_sum_assignment
 
-from captionize.protocol import OCRSynapse
+from captionize.protocol import CaptionSynapse  # our custom synapse for captioning
 
-
-def get_position_reward(boxA: List[float], boxB: List[float] = None):
+def get_text_reward(text1: str, text2: str = None) -> float:
     """
-    Calculate the intersection over union (IoU) of two bounding boxes.
+    Calculate a normalized text reward based on edit distance.
+    A reward of 1.0 means a perfect match.
 
     Args:
-    - boxA (list): Bounding box coordinates of box A in the format [x1, y1, x2, y2].
-    - boxB (list): Bounding box coordinates of box B in the format [x1, y1, x2, y2].
+      text1 (str): The reference transcript.
+      text2 (str): The predicted transcript.
 
     Returns:
-    - float: The IoU value, ranging from 0 to 1.
-    """
-    if not boxB:
-        return 0.0
-
-    xA = max(boxA[0], boxB[0])
-    yA = max(boxA[1], boxB[1])
-    xB = min(boxA[2], boxB[2])
-    yB = min(boxA[3], boxB[3])
-
-    intersection_area = max(0, xB - xA + 1) * max(0, yB - yA + 1)
-
-    boxA_area = (boxA[2] - boxA[0] + 1) * (boxA[3] - boxA[1] + 1)
-    boxB_area = (boxB[2] - boxB[0] + 1) * (boxB[3] - boxB[1] + 1)
-
-    iou = intersection_area / float(boxA_area + boxB_area - intersection_area)
-
-    return iou
-
-def get_text_reward(text1: str, text2: str = None):
-    """
-    Calculate the edit distance between two strings.
-
-    Args:
-    - text1 (str): The first string.
-    - text2 (str): The second string.
-
-    Returns:
-    - float: The edit distance between the two strings. Normalized to be between 0 and 1.
+      float: Normalized text reward between 0 and 1.
     """
     if not text2:
         return 0.0
-
     return 1 - editdistance.eval(text1, text2) / max(len(text1), len(text2))
 
-def get_font_reward(font1: dict, font2: dict = None, alpha_size=1.0, alpha_family=1.0):
+def get_gender_reward(gender_true: str, gender_pred: str = None) -> float:
     """
-    Calculate the distance between two fonts, based on the font size and font family.
-
+    Compute a reward based on the comparison of speaker gender.
+    
+    Returns 1.0 if the genders match (case-insensitive), otherwise 0.0.
+    
     Args:
-    - font1 (dict): The first font.
-    - font2 (dict): The second font.
-
+      gender_true (str): Ground truth speaker gender.
+      gender_pred (str, optional): Predicted speaker gender.
+      
     Returns:
-    - float: The distance between the two fonts. Normalized to be between 0 and 1.
+      float: 1.0 if genders match, 0.0 otherwise.
     """
-    if not font2:
+    if not gender_pred:
         return 0.0
+    return 1.0 if gender_true.strip().lower() == gender_pred.strip().lower() else 0.0
 
-    font_size_score = ( 1 - abs(font1['size'] - font2['size']) / max(font1['size'], font2['size']) )
-    font_family_score = alpha_family * float(font1['family'] == font2['family'])
-    return (alpha_size * font_size_score + alpha_family * font_family_score) / (alpha_size + alpha_family)
-
-def section_reward(label: dict, pred: dict, alpha_p=1.0, alpha_f=1.0, alpha_t=1.0, verbose=False):
+def section_reward(label: dict, pred: dict, alpha_t: float = 1.0, verbose: bool = False) -> dict:
     """
-    Score a section of the image based on the section's correctness.
-    Correctness is defined as:
-    - the intersection over union of the bounding boxes,
-    - the delta between the predicted font and the ground truth font,
-    - and the edit distance between the predicted text and the ground truth text.
-
+    Compute a reward for a single caption segment based on text quality.
+    
     Args:
-    - label (dict): The ground truth data for the section.
-    - pred (dict): The predicted data for the section.
-
+      label (dict): Ground truth segment with "text".
+      pred (dict): Predicted segment with "text".
+      alpha_t (float): Weight factor for text reward.
+      verbose (bool): If True, logs additional details.
+      
     Returns:
-    - float: The score for the section. Bounded between 0 and 1.
+      dict: Contains the text reward and a total reward (scaled by alpha_t).
     """
-    reward = {
-        'text': get_text_reward(label['text'], pred.get('text')),
-        'position': get_position_reward(label['position'], pred.get('position')),
-        'font': get_font_reward(label['font'], pred.get('font')),
-    }
-
-    reward['total'] = (alpha_t * reward['text'] + alpha_p * reward['position'] + alpha_f * reward['font']) / (alpha_p + alpha_f + alpha_t)
-
+    text_reward = get_text_reward(label['text'], pred.get('text'))
+    total = alpha_t * text_reward
     if verbose:
-        bt.logging.info(', '.join([f"{k}: {v:.3f}" for k,v in reward.items()]))
+        bt.logging.info(', '.join([f"text_reward: {text_reward:.3f}", f"total: {total:.3f}"]))
+    return {"text": text_reward, "total": total}
 
-    return reward
-
-def sort_predictions(labels: List[dict], predictions: List[dict], draw=False) -> List[dict]:
+def sort_predictions(labels: List[dict], predictions: List[dict]) -> List[dict]:
     """
-    Sort the predictions to match the order of the ground truth data using the Hungarian algorithm.
-
+    Align the predicted segments with the ground truth segments using the Hungarian algorithm.
+    
     Args:
-    - labels (list): The ground truth data for the image.
-    - predictions (list): The predicted data for the image.
-
+      labels (List[dict]): List of ground truth segments.
+      predictions (List[dict]): List of predicted segments.
+      
     Returns:
-    - list: The sorted predictions.
+      List[dict]: Sorted predictions aligned with labels.
     """
-
-    # First, make sure that the predictions is at least as long as the image data
     predictions += [{}] * (len(labels) - len(predictions))
     r = torch.zeros((len(labels), len(predictions)))
-    for i in range(r.shape[0]):
-        for j in range(r.shape[1]):
-            r[i,j] = section_reward(labels[i], predictions[j])['total']
+    for i in range(len(labels)):
+        for j in range(len(predictions)):
+            r[i, j] = section_reward(labels[i], predictions[j])["total"]
+    row_ind, col_ind = linear_sum_assignment(r.numpy(), maximize=True)
+    sorted_preds = [predictions[i] for i in col_ind]
+    return sorted_preds
 
-    # Use the Hungarian algorithm to find the best assignment
-    row_indices, col_indices = linear_sum_assignment(r, maximize=True)
-
-    sorted_predictions = [predictions[i] for i in col_indices]
-
-    return sorted_predictions
-
-
-def reward(self, labels: List[dict], response: OCRSynapse) -> float:
+def reward(self, labels: List[dict], response: CaptionSynapse) -> float:
     """
-    Reward the miner response to the OCR request. This method returns a reward
-    value for the miner, which is used to update the miner's score.
-
+    Compute the overall reward for a miner's response to a caption task.
+    The reward combines text accuracy, response time, and gender accuracy.
+    
     Args:
-    - labels (List[dict]): The true data underlying the image sent to the miner.
-    - response (OCRSynapse): Response from the miner.
-
-    The expected fields in each section of the response are:
-    - position (List[int]): The bounding box of the section e.g. [x0, y0, x1, y1]
-    - font (dict): The font of the section e.g. {'family': 'Times New Roman', 'size':12}
-    - text (str): The text of the section e.g. 'Hello World!'
-
+      labels (List[dict]): Ground truth segments, each with "text" and "gender" fields.
+      response (CaptionSynapse): The miner's response, expected to include:
+           - segments: a list of predicted CaptionSegment objects (each with "text")
+           - time_elapsed: time taken by the miner to produce the response
+           - predicted_gender (optional): predicted speaker gender.
+    
     Returns:
-    - float: The reward value for the miner.
+      float: The final combined reward.
     """
-    predictions = response.response
+    predictions = response.segments
     if predictions is None:
         return 0.0
 
-    # Sort the predictions to match the order of the ground truth data as best as possible
-    predictions = sort_predictions(labels, predictions)
+    # Align predictions with ground truth segments
+    predictions = sort_predictions(labels, [seg.dict() for seg in predictions])
+    
+    # Retrieve weight factors from configuration
+    alpha_text = self.config.neuron.alpha_text    # e.g., weight for text quality
+    alpha_prediction = self.config.neuron.alpha_prediction  # overall prediction weight
+    alpha_time = self.config.neuron.alpha_time      # weight for response time
+    alpha_gender = self.config.neuron.alpha_gender  # weight for gender matching
 
-    alpha_p = self.config.neuron.alpha_position
-    alpha_t = self.config.neuron.alpha_text
-    alpha_f = self.config.neuron.alpha_font
-    alpha_prediction = self.config.neuron.alpha_prediction
-    alpha_time = self.config.neuron.alpha_time
-
-    # Take mean score over all sections in document (note that we don't penalize extra sections)
+    # Compute text reward from each segment
     section_rewards = [
-        section_reward(label, pred, verbose=True, alpha_f=alpha_f, alpha_p=alpha_p, alpha_t=alpha_t)
+        section_reward(label, pred, alpha_t=alpha_text, verbose=True)
         for label, pred in zip(labels, predictions)
     ]
-    prediction_reward = torch.mean(torch.FloatTensor([reward['total'] for reward in section_rewards]))
-
+    text_reward_values = [r["total"] for r in section_rewards]
+    prediction_reward = torch.mean(torch.FloatTensor(text_reward_values))
+    
+    # Compute time reward: assuming response has attribute time_elapsed
     time_reward = max(1 - response.time_elapsed / self.config.neuron.timeout, 0)
-    total_reward = (alpha_prediction * prediction_reward + alpha_time * time_reward) / (alpha_prediction + alpha_time)
-
-    bt.logging.info(f"prediction_reward: {prediction_reward:.3f}, time_reward: {time_reward:.3f}, total_reward: {total_reward:.3f}")
+    
+    # Compute gender reward: assume ground truth is in labels[0]["gender"] and miner provides predicted_gender
+    gender_true = labels[0].get("gender", "").strip()
+    gender_pred = getattr(response, "predicted_gender", None)
+    gender_reward = get_gender_reward(gender_true, gender_pred)
+    
+    # Combine rewards using weighted average
+    total_reward = (alpha_prediction * prediction_reward + alpha_time * time_reward + alpha_gender * gender_reward) \
+                   / (alpha_prediction + alpha_time + alpha_gender)
+    
+    bt.logging.info(f"Prediction Reward: {prediction_reward:.3f}, Time Reward: {time_reward:.3f}, Gender Reward: {gender_reward:.3f}, Total Reward: {total_reward:.3f}")
     return total_reward
 
-def get_rewards(
-    self,
-    labels: List[dict],
-    responses: List[OCRSynapse],
-) -> torch.FloatTensor:
+def get_rewards(self, labels: List[dict], responses: List[CaptionSynapse]) -> torch.FloatTensor:
     """
-    Returns a tensor of rewards for the given image and responses.
-
+    Compute rewards for a batch of miner responses.
+    
     Args:
-    - image (List[dict]): The true data underlying the image sent to the miner.
-    - responses (List[OCRSynapse]): A list of responses from the miner.
-
+      labels (List[dict]): The ground truth segments.
+      responses (List[CaptionSynapse]): List of miner responses.
+    
     Returns:
-    - torch.FloatTensor: A tensor of rewards for the given image and responses.
+      torch.FloatTensor: Tensor of computed rewards.
     """
-    # Get all the reward results by iteratively calling your reward() function.
-    return torch.FloatTensor(
-        [reward(self, labels, response) for response in responses]
-    ).to(self.device)
+    rewards = [reward(self, labels, response) for response in responses]
+    return torch.FloatTensor(rewards).to(self.device)
