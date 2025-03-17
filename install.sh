@@ -15,7 +15,7 @@ python3.10 -m ensurepip
 
 # Install auxiliary packages
 sudo apt-get update
-sudo apt-get install npm -y
+sudo apt install python3.10-venv npm -y
 sudo npm install -g pm2 -y
 chmod +x setup_local_db.sh
 ./setup_local_db.sh
