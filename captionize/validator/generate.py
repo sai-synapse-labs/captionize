@@ -87,6 +87,8 @@ def process_example(data: dict) -> dict:
     num_rows = len(rows)
     if num_rows == 0:
         raise ValueError("No rows available in dataset")
+    bt.logging.debug(f"Number of rows: {num_rows}")
+    
     job_row = rows[random.randint(0, num_rows - 1)]
     job_id = str(uuid.uuid4())
     job_status = "not_done"
@@ -172,7 +174,6 @@ def generate_synthetic_job() -> dict:
     example = dataset[random_index]
     job_dict = process_example(example)
     # insert_job_to_rqlite(job_dict)
-    bt.logging.debug(f"Generated job: {job_dict}")
     return job_dict
 
 if __name__ == "__main__":
