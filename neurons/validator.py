@@ -25,6 +25,7 @@ from captionize.base.validator import BaseValidatorNeuron
 from captionize.validator.generate import generate_synthetic_jobs
 from captionize.validator.reward import get_rewards
 from captionize.utils.uids import get_random_uids
+import torch
 
 class Validator(BaseValidatorNeuron):
     """
@@ -118,6 +119,58 @@ class Validator(BaseValidatorNeuron):
         self.update_scores(rewards, miner_uids)
         
         return synapse
+
+    def set_weights(self):
+        """
+        Override the base validator's set_weights method to handle tensor conversions properly.
+        Sets the validator weights for each miner UID based on their performance scores.
+        """
+        # Check if scores contain NaN values
+        if torch.isnan(self.scores).any():
+            bt.logging.warning("Scores contain NaN values. This may indicate an issue with reward calculations.")
+            # Replace NaN with zeros to prevent errors
+            self.scores = torch.nan_to_num(self.scores, 0.0)
+        
+        # Ensure scores is a PyTorch tensor on the correct device
+        if not isinstance(self.scores, torch.Tensor):
+            self.scores = torch.tensor(self.scores, dtype=torch.float32).to(self.device)
+        
+        # Normalize scores to get weights (sum to 1)
+        weights = torch.nn.functional.normalize(self.scores, p=1, dim=0)
+        bt.logging.debug(f"Normalized weights: {weights}")
+        
+        # Process weights for chain compatibility
+        try:
+            # Make sure weights is on CPU and convert to numpy when passing to process_weights_for_netuid
+            weights_cpu = weights.detach().cpu()
+            processed_weight_uids, processed_weights = bt.utils.weight_utils.process_weights_for_netuid(
+                uids=self.metagraph.uids,
+                weights=weights_cpu,
+                netuid=self.config.netuid,
+                subtensor=self.subtensor,
+                metagraph=self.metagraph,
+            )
+            
+            bt.logging.debug(f"Processed weights: {processed_weights}")
+            bt.logging.debug(f"Processed weight UIDs: {processed_weight_uids}")
+            
+            # Set weights on chain
+            self.subtensor.set_weights(
+                wallet=self.wallet,
+                netuid=self.config.netuid,
+                uids=processed_weight_uids,
+                weights=processed_weights,
+                wait_for_finalization=False,
+                version_key=self.spec_version,
+            )
+            
+            bt.logging.info(f"Set weights: {processed_weights}")
+            
+        except Exception as e:
+            bt.logging.error(f"Failed to set weights: {e}")
+            import traceback
+            bt.logging.debug(traceback.format_exc())
+
 if __name__ == "__main__":
     with Validator() as validator:
         while True:
