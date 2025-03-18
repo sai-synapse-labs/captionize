@@ -64,6 +64,16 @@ def load_voxpopuli_data():
             bt.logging.info("Retrying in 5 minutes...")
             time.sleep(300)  # Wait 5 minutes before retrying
     data = response.json()
+    # Save the raw data as JSON for debugging/reference
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    json_path = f"data/voxpopuli_data_{timestamp}.json"
+    
+    # Ensure directory exists
+    os.makedirs(os.path.dirname(json_path), exist_ok=True)
+    
+    with open(json_path, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2)
+    bt.logging.info(f"Saved raw dataset to {json_path}")
     bt.logging.info(f"Fetched data: {json.dumps(data, indent=2)}")
     return data
 
@@ -149,7 +159,32 @@ def generate_synthetic_jobs() -> list:
     Returns:
         list: A list of job dictionaries.
     """
-    examples = load_voxpopuli_data()
+    bt.logging.info("Loading VoxPopuli dataset...")
+    # Check for existing VoxPopuli data files
+    data_dir = "data"
+    os.makedirs(data_dir, exist_ok=True)
+    
+    # Find any existing voxpopuli data files
+    existing_files = [f for f in os.listdir(data_dir) if f.startswith("voxpopuli_data_") and f.endswith(".json")]
+    
+    if existing_files:
+        # Use the most recent file if multiple exist
+        latest_file = max(existing_files)
+        data_path = os.path.join(data_dir, latest_file)
+        bt.logging.info(f"Loading cached VoxPopuli data from {data_path}")
+        
+        try:
+            with open(data_path, 'r') as f:
+                examples = json.load(f)
+            bt.logging.info(f"Loaded {len(examples['rows'])} examples from cache")
+            return examples
+        except Exception as e:
+            bt.logging.warning(f"Error loading cached data: {e}")
+            bt.logging.info("Falling back to loading fresh data")
+    else:
+    # If no valid cache found, load fresh data
+        bt.logging.info("No cached data found, loading fresh VoxPopuli data...")
+        examples = load_voxpopuli_data()
     jobs = process_examples(examples)
     return jobs
 

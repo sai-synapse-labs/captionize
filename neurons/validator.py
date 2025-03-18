@@ -90,11 +90,15 @@ class Validator(BaseValidatorNeuron):
             job_synapses.append(synapse)
         
         # Query miners with the synapse. Assume dendrite.query returns a list of responses.
-        responses = self.dendrite.query(
+        responses = await self.dendrite.query(
             axons=[self.metagraph.axons[uid] for uid in miner_uids],
             synapse=synapse,
             deserialize=False,  # we want the raw response for further processing
         )
+        
+        # If no responses, handle gracefully
+        if responses is None:
+            responses = []
         
         bt.logging.info(f"Received responses: {responses}")
         
