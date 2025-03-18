@@ -199,17 +199,18 @@ def generate_synthetic_jobs() -> list:
         
         try:
             with open(data_path, 'r') as f:
-                examples = json.load(f)
-            bt.logging.info(f"Loaded {len(examples['rows'])} examples from cache")
-            return examples
+                data = json.load(f)
+            bt.logging.info(f"Loaded {len(data.get('rows', []))} examples from cache")
+            # Process the loaded data instead of returning it directly
+            return process_examples(data)
         except Exception as e:
             bt.logging.warning(f"Error loading cached data: {e}")
             bt.logging.info("Falling back to loading fresh data")
-    else:
-    # If no valid cache found, load fresh data
-        bt.logging.info("No cached data found, loading fresh VoxPopuli data...")
-        examples = load_voxpopuli_data()
-    jobs = process_examples(examples)
+    
+    # If no valid cache found or there was an error, load fresh data
+    bt.logging.info("No cached data found, loading fresh VoxPopuli data...")
+    data = load_voxpopuli_data()
+    jobs = process_examples(data)
     return jobs
 
 if __name__ == "__main__":
