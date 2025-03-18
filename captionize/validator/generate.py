@@ -61,8 +61,8 @@ def load_voxpopuli_data():
             break
         except Exception as e:
             bt.logging.error(f"Error fetching dataset: {e}")
-            bt.logging.info("Retrying in 5 minutes...")
-            time.sleep(300)  # Wait 5 minutes before retrying
+            bt.logging.info("Retrying in 2 minutes...")
+            time.sleep(120)  # Wait 2 minutes before retrying
     data = response.json()
     # Save the raw data as JSON for debugging/reference
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")

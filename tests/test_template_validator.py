@@ -79,7 +79,7 @@ class TemplateValidatorNeuronTestCase(unittest.TestCase):
 
     def test_reward(self):
         # TODO: Test that the reward function returns the correct value
-        responses = self.dendrite.query(
+        responses = self.dendrite.forward(
             # Send the query to miners in the network.
             axons=[self.metagraph.axons[uid] for uid in self.miner_uids],
             # Construct a dummy query.
@@ -95,7 +95,7 @@ class TemplateValidatorNeuronTestCase(unittest.TestCase):
     def test_reward_with_nan(self):
         # TODO: Test that NaN rewards are correctly sanitized
         # TODO: Test that a bt.logging.warning is thrown when a NaN reward is sanitized
-        responses = self.dendrite.query(
+        responses = self.dendrite.forward(
             # Send the query to miners in the network.
             axons=[self.metagraph.axons[uid] for uid in self.miner_uids],
             # Construct a dummy query.
