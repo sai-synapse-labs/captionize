@@ -92,10 +92,18 @@ class Miner(BaseMinerNeuron):
                 audio_file = temp_filename
 
             try:
-                # Transcribe the audio using SpeechBrain ASR model.
+                # Transcribe the audio using SpeechBrain ASR model
                 transcript = self.asr_model.transcribe_file(audio_file)
-                # Predict gender using the voice gender classifier.
-                predicted_gender = self.gender_model.predict(audio_file, device=self.device)
+                
+                # Predict gender using the voice gender classifier
+                # Ensure we're using the same device throughout the process
+                # First move model to same device as input if needed
+                current_device = next(self.gender_model.parameters()).device
+                bt.logging.debug(f"Gender model is on device: {current_device}")
+                
+                # Use model's predict method with explicit device parameter
+                predicted_gender = self.gender_model.predict(audio_file, device=current_device)
+                
             except Exception as e:
                 bt.logging.warning(f"Error during transcription/gender recognition: {e}")
                 synapse.job_status = "failed"
@@ -106,14 +114,10 @@ class Miner(BaseMinerNeuron):
             if (not synapse.audio_path) and os.path.exists(audio_file):
                 os.remove(audio_file)
 
-            # Update synapse with transcription result and predicted gender.
-            synapse.segments = [{
-                # "start_time": 0.0,   # Dummy timing; adjust if you have actual alignment.
-                # "end_time": 0.0,
-                "text": transcript,
-                "gender": predicted_gender
-            }]
-            synapse.time_elapsed = time.time() - start_time
+            # Update synapse with transcription result and predicted gender
+            synapse.segments = [{"text": transcript}]
+            synapse.predicted_gender = predicted_gender  # Store in the dedicated field
+            synapse.time_elapsed = time.time() - start_time  # Now a regular field
             synapse.job_status = "done"
         else:
             bt.logging.info("Job already processed; skipping transcription.")

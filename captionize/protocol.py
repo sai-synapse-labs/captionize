@@ -34,16 +34,16 @@ class CaptionSynapse(bt.Synapse):
             - "text": (str) the transcribed text.
             - "gender": (str) the gender of the speaker.      
       - job_status: Optional status information from the miner.
-      - time_elapsed: A class-level attribute representing the processing time (not stored as a model field).
+      - time_elapsed: Time taken to process the request in seconds.
     """
-    time_elapsed: ClassVar[float] = 0.0
-
     job_id: Optional[str] = None
     base64_audio: Optional[str] = None
     audio_path: Optional[str] = None
     language: Optional[str] = "en"
-    segments: Optional[List[dict]] = None    # Each dict: {"start_time": float, "end_time": float, "text": str, "gender": str}    
+    segments: Optional[List[dict]] = None    # Each dict: {"start_time": float, "end_time": float, "text": str, "gender": str}
     job_status: Optional[str] = None
+    time_elapsed: Optional[float] = 0.0      # Changed from ClassVar to regular field
+    predicted_gender: Optional[str] = None    # Added for storing gender prediction
 
     def deserialize(self) -> "CaptionSynapse":
         """
