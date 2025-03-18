@@ -44,56 +44,50 @@ class Miner(BaseMinerNeuron):
     def __init__(self, config=None):
         super(Miner, self).__init__(config=config)
 
-        # Determine device before loading models
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        bt.logging.info(f"Using device: {self.device}")
-
-        # Load SpeechBrain ASR model for transcription.
-        asr_source = "speechbrain/asr-crdnn-rnnlm-librispeech"  # or choose another suitable model
-        self.asr_model = EncoderDecoderASR.from_hparams(source=asr_source, savedir="pretrained_models/asr-crdnn-rnnlm-librispeech")
-        self.asr_model.eval()
-        
-        # Load the pretrained voice gender classifier.
-        self.gender_model = ECAPA_gender.from_pretrained("JaesungHuh/voice-gender-classifier")
-        self.gender_model.eval()
-        
-        # Move models to the appropriate device
+        # Determine device - prefer GPU for performance
         try:
-            self.asr_model.to(self.device)
-            self.gender_model.to(self.device)
-            bt.logging.info(f"Models moved to {self.device}")
-        except Exception as e:
-            bt.logging.error(f"Error moving models to device: {e}")
-            if self.device.type == 'cuda':
-                bt.logging.warning("Falling back to CPU")
-                self.device = torch.device("cpu")
-                self.asr_model.to(self.device)
-                self.gender_model.to(self.device)
+            self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+            bt.logging.info(f"Using device: {self.device}")
+        except:
+            self.device = torch.device("cpu")
+            bt.logging.warning("Error setting device, falling back to CPU")
 
-        bt.logging.info(f"Loaded ASR model from {asr_source} and voice gender classifier.")
+        # Load models with careful error handling
+        try:
+            # Load SpeechBrain ASR model for transcription
+            asr_source = "speechbrain/asr-crdnn-rnnlm-librispeech"
+            self.asr_model = EncoderDecoderASR.from_hparams(source=asr_source, savedir="pretrained_models/asr-crdnn-rnnlm-librispeech")
+            self.asr_model.eval()
+            
+            # Load the pretrained voice gender classifier
+            self.gender_model = ECAPA_gender.from_pretrained("JaesungHuh/voice-gender-classifier")
+            self.gender_model.eval()
+            
+            # Try to move models to GPU (with fallback to CPU)
+            if self.device.type == 'cuda':
+                try:
+                    self.asr_model.to(self.device)
+                    self.gender_model.to(self.device)
+                    bt.logging.info(f"Models moved to {self.device}")
+                except Exception as e:
+                    bt.logging.warning(f"Failed to move models to {self.device}: {e}")
+                    self.device = torch.device("cpu")
+                    bt.logging.info("Falling back to CPU")
+            
+            bt.logging.info(f"Loaded ASR model from {asr_source} and voice gender classifier on {self.device}")
+        except Exception as e:
+            bt.logging.error(f"Error initializing models: {e}")
+            import traceback
+            bt.logging.debug(traceback.format_exc())
+            raise
 
     async def forward(self, synapse: CaptionSynapse) -> CaptionSynapse:
         """
-        Process the incoming CaptionSynapse request.
-        
-        If the job has not been processed (i.e. job_status is not "done"),
-        it:
-          - Obtains the audio file path from synapse (or decodes the base64_audio to a temporary file).
-          - Uses SpeechBrain to transcribe the audio.
-          - Uses the voice gender classifier to predict gender.
-          - Updates the synapse with a transcript (wrapped as a single segment) and predicted gender.
-          - Updates job_status to "done" and records the time_elapsed.
-        
-        Args:
-            synapse (CaptionSynapse): The synapse with incoming job data.
-        
-        Returns:
-            CaptionSynapse: The synapse with attached transcription results and gender prediction.
+        Process the incoming CaptionSynapse request with GPU acceleration and fallbacks.
         """
         start_time = time.time()
-        # Process only if job_status is not "done"
         if synapse.job_status not in ["done"]:
-            # Use audio_path if provided; otherwise, decode base64_audio and write to a temporary file.
+            # Get or create audio file
             if synapse.audio_path and os.path.exists(synapse.audio_path):
                 audio_file = synapse.audio_path
             else:
@@ -103,58 +97,76 @@ class Miner(BaseMinerNeuron):
                     f.write(audio_bytes)
                 audio_file = temp_filename
 
+            transcript = ""
+            predicted_gender = "unknown"
+            used_device = self.device  # Start with configured device
+            
+            # Process with error handling and GPU fallback
             try:
-                # Transcribe the audio using SpeechBrain ASR model
-                bt.logging.debug(f"Transcribing file: {audio_file}")
-                transcript = self.asr_model.transcribe_file(audio_file)
+                # Try transcription with current device setting
+                bt.logging.debug(f"Transcribing file using {used_device}: {audio_file}")
                 
-                # Gender classification can have device issues, handle carefully
-                bt.logging.debug(f"Predicting gender from file: {audio_file}")
-                try:
-                    # Ensure model is in eval mode and on the right device
-                    self.gender_model.eval()
-                    self.gender_model.to(self.device)
-                    
-                    # Make sure the ECAPA model's internal device setting matches too
-                    if hasattr(self.gender_model, 'device'):
-                        self.gender_model.device = self.device
-                    
-                    # Option 1: Use the model's predict method with explicit device parameter
-                    predicted_gender = self.gender_model.predict(audio_file, device=self.device)
-                    
-                except Exception as e:
-                    bt.logging.error(f"Error in gender prediction: {e}")
-                    bt.logging.info("Attempting fallback gender prediction on CPU")
-                    
-                    # Option 2: Move model to CPU for prediction as a fallback
+                # Try using GPU first
+                if used_device.type == 'cuda':
                     try:
-                        self.gender_model.to('cpu')
-                        if hasattr(self.gender_model, 'device'):
-                            self.gender_model.device = torch.device('cpu')
-                        predicted_gender = self.gender_model.predict(audio_file, device='cpu')
-                        # Move back to original device after prediction
-                        self.gender_model.to(self.device)
-                    except Exception as e2:
-                        bt.logging.error(f"Fallback gender prediction also failed: {e2}")
+                        # Ensure model is on the right device
+                        self.asr_model.to(used_device)
+                        transcript = self.asr_model.transcribe_file(audio_file)
+                        bt.logging.debug(f"Transcription result (GPU): '{transcript}'")
+                    except Exception as gpu_err:
+                        # Fall back to CPU if GPU fails
+                        bt.logging.warning(f"GPU transcription failed, falling back to CPU: {gpu_err}")
+                        used_device = torch.device("cpu")
+                        self.asr_model.to(used_device)
+                        transcript = self.asr_model.transcribe_file(audio_file)
+                        bt.logging.debug(f"Transcription result (CPU fallback): '{transcript}'")
+                else:
+                    # Use CPU directly if that's our primary device
+                    transcript = self.asr_model.transcribe_file(audio_file)
+                    
+                # Try gender prediction on same device as successful transcription
+                try:
+                    bt.logging.debug(f"Predicting gender on {used_device} from file: {audio_file}")
+                    # Move gender model to same device as successful transcription
+                    self.gender_model.to(used_device)
+                    if hasattr(self.gender_model, 'device'):
+                        # Some models have internal device tracking
+                        self.gender_model.device = used_device
+                    predicted_gender = self.gender_model.predict(audio_file, device=used_device)
+                    bt.logging.debug(f"Gender prediction result: {predicted_gender}")
+                except Exception as e:
+                    # Fall back to CPU for gender prediction if needed
+                    bt.logging.warning(f"Gender prediction on {used_device} failed: {e}")
+                    if used_device.type == 'cuda':
+                        bt.logging.info("Trying gender prediction on CPU instead")
+                        try:
+                            self.gender_model.to('cpu')
+                            if hasattr(self.gender_model, 'device'):
+                                self.gender_model.device = torch.device('cpu')
+                            predicted_gender = self.gender_model.predict(audio_file, device='cpu')
+                            bt.logging.debug(f"Gender prediction result (CPU fallback): {predicted_gender}")
+                        except Exception as e2:
+                            bt.logging.error(f"CPU fallback gender prediction also failed: {e2}")
+                            predicted_gender = "unknown"
+                    else:
                         predicted_gender = "unknown"
-                
+                    
             except Exception as e:
-                bt.logging.error(f"Error during transcription/gender recognition: {e}")
+                bt.logging.error(f"Error during processing: {e}")
+                import traceback
+                bt.logging.debug(traceback.format_exc())
                 synapse.job_status = "failed"
-                transcript = ""
-                predicted_gender = None
 
-            # If we created a temporary file, remove it.
+            # Cleanup temp file
             if (not synapse.audio_path) and os.path.exists(audio_file):
                 os.remove(audio_file)
 
-            # Update synapse with transcription result and predicted gender
+            # Update synapse with results
             synapse.segments = [{"text": transcript}]
-            synapse.predicted_gender = predicted_gender  # Store in the dedicated field
-            synapse.time_elapsed = time.time() - start_time  # Now a regular field
+            synapse.predicted_gender = predicted_gender
+            synapse.time_elapsed = time.time() - start_time
             synapse.job_status = "done"
-        else:
-            bt.logging.info("Job already processed; skipping transcription.")
+            
         return synapse
 
     async def blacklist(self, synapse: CaptionSynapse) -> typing.Tuple[bool, str]:
