@@ -22,7 +22,7 @@ import bittensor as bt
 
 import captionize  # our project package
 from captionize.base.validator import BaseValidatorNeuron
-from captionize.validator.generate import generate_synthetic_job
+from captionize.validator.generate import generate_synthetic_jobs
 from captionize.validator.reward import get_rewards
 from captionize.utils.uids import get_random_uids
 
@@ -65,7 +65,7 @@ class Validator(BaseValidatorNeuron):
         bt.logging.debug(f"Miner UIDs: {miner_uids}")
         
         # Generate a synthetic caption job from VoxPopuli
-        job_data = generate_synthetic_job()
+        job_data = generate_synthetic_jobs()
         bt.logging.debug(f"Generated job: {job_data}")
         
         # For scoring, create ground-truth labels using the transcript.
