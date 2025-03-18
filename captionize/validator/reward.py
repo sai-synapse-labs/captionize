@@ -86,12 +86,20 @@ def sort_predictions(labels: List[dict], predictions: List[dict]) -> List[dict]:
     Returns:
       List[dict]: Sorted predictions aligned with labels.
     """
+    # Pad predictions if needed
     predictions += [{}] * (len(labels) - len(predictions))
+    
+    # Create reward matrix
     r = torch.zeros((len(labels), len(predictions)))
     for i in range(len(labels)):
         for j in range(len(predictions)):
             r[i, j] = section_reward(labels[i], predictions[j])["total"]
-    row_ind, col_ind = linear_sum_assignment(r.numpy(), maximize=True)
+    
+    # Convert to NumPy for scipy, then back to native Python types
+    row_ind, col_ind = linear_sum_assignment(r.detach().cpu().numpy(), maximize=True)
+    col_ind = col_ind.tolist()  # Convert NumPy array to Python list
+    
+    # Sort the predictions based on the assignment
     sorted_preds = [predictions[i] for i in col_ind]
     return sorted_preds
 
@@ -161,9 +169,17 @@ def get_rewards(self, labels: List[dict], responses: List[CaptionSynapse]) -> to
       If responses is None, returns a zero tensor of shape (1,).
       This handles the case where dendrite.query() returns None.
     """
-    for response in responses:
-      if response is None:
+    # Handle empty responses or None
+    if responses is None or len(responses) == 0:
         return torch.zeros(1).to(self.device)
-      else: 
-        rewards = [reward(self, labels, response)]
-        return torch.FloatTensor(rewards).to(self.device)
+    
+    # Calculate rewards for each response
+    rewards = []
+    for response in responses:
+        if response is None:
+            rewards.append(0.0)  # Add zero reward for None response
+        else:
+            rewards.append(reward(self, labels, response))
+    
+    # Convert to PyTorch tensor and return
+    return torch.FloatTensor(rewards).to(self.device)
