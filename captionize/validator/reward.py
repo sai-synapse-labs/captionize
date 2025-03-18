@@ -70,6 +70,12 @@ def section_reward(label: dict, pred: dict, alpha_t: float = 1.0, verbose: bool 
       dict: Contains the text reward and a total reward (scaled by alpha_t).
     """
     text_reward = get_text_reward(label['text'], pred.get('text'))
+    
+    # Ensure alpha_t is a valid number
+    if alpha_t is None:
+        bt.logging.warning("alpha_t was None in section_reward, using default value 1.0")
+        alpha_t = 1.0
+    
     total = alpha_t * text_reward
     if verbose:
         bt.logging.info(', '.join([f"text_reward: {text_reward:.3f}", f"total: {total:.3f}"]))
@@ -144,11 +150,46 @@ def reward(self, labels: List[dict], response: CaptionSynapse) -> float:
     # Align predictions with ground truth segments
     aligned_predictions = sort_predictions(labels, segment_dicts)
     
-    # Retrieve weight factors from configuration
-    alpha_text = self.config.neuron.alpha_text    # e.g., weight for text quality
-    alpha_prediction = self.config.neuron.alpha_prediction  # overall prediction weight
-    alpha_time = self.config.neuron.alpha_time      # weight for response time
-    alpha_gender = self.config.neuron.alpha_gender  # weight for gender matching
+    # Retrieve weight factors from configuration with defaults
+    try:
+        alpha_text = float(getattr(self.config.neuron, 'alpha_text', 1.0))
+        if alpha_text is None:
+            alpha_text = 1.0
+    except (ValueError, TypeError):
+        bt.logging.warning("Invalid alpha_text in config, using default 1.0")
+        alpha_text = 1.0
+    
+    try:
+        alpha_prediction = float(getattr(self.config.neuron, 'alpha_prediction', 0.7))
+        if alpha_prediction is None or alpha_prediction <= 0:
+            alpha_prediction = 0.7
+    except (ValueError, TypeError):
+        bt.logging.warning("Invalid alpha_prediction in config, using default 0.7")
+        alpha_prediction = 0.7
+    
+    try:
+        alpha_time = float(getattr(self.config.neuron, 'alpha_time', 0.2))
+        if alpha_time is None or alpha_time < 0:
+            alpha_time = 0.2
+    except (ValueError, TypeError):
+        bt.logging.warning("Invalid alpha_time in config, using default 0.2")
+        alpha_time = 0.2
+    
+    try:
+        alpha_gender = float(getattr(self.config.neuron, 'alpha_gender', 0.1))
+        if alpha_gender is None or alpha_gender < 0:
+            alpha_gender = 0.1
+    except (ValueError, TypeError):
+        bt.logging.warning("Invalid alpha_gender in config, using default 0.1")
+        alpha_gender = 0.1
+    
+    try:
+        timeout = float(getattr(self.config.neuron, 'timeout', 10.0))
+        if timeout is None or timeout <= 0:
+            timeout = 10.0
+    except (ValueError, TypeError):
+        bt.logging.warning("Invalid timeout in config, using default 10.0")
+        timeout = 10.0
 
     # Compute text reward from each segment
     section_rewards = [
@@ -159,7 +200,7 @@ def reward(self, labels: List[dict], response: CaptionSynapse) -> float:
     prediction_reward = torch.mean(torch.FloatTensor(text_reward_values))
     
     # Compute time reward
-    time_reward = max(1 - response.time_elapsed / self.config.neuron.timeout, 0)
+    time_reward = max(1 - response.time_elapsed / timeout, 0)
     
     # Compute gender reward using predicted_gender field
     gender_true = labels[0].get("gender", "").strip()
@@ -167,10 +208,16 @@ def reward(self, labels: List[dict], response: CaptionSynapse) -> float:
     gender_reward = get_gender_reward(gender_true, gender_pred)
     
     # Combine rewards using weighted average
-    total_reward = (alpha_prediction * prediction_reward + alpha_time * time_reward + alpha_gender * gender_reward) \
-                   / (alpha_prediction + alpha_time + alpha_gender)
+    # weight_sum = alpha_prediction + alpha_time + alpha_gender
+    weight_sum = alpha_prediction + alpha_gender
+    if weight_sum <= 0:
+        bt.logging.warning("Sum of weights is zero or negative, using equal weights")
+        alpha_prediction = alpha_gender = 1.0
+        weight_sum = 3.0
     
-    bt.logging.info(f"Prediction Reward: {prediction_reward:.3f}, Time Reward: {time_reward:.3f}, Gender Reward: {gender_reward:.3f}, Total Reward: {total_reward:.3f}")
+    total_reward = (alpha_prediction * prediction_reward + alpha_gender * gender_reward) / weight_sum
+    
+    bt.logging.info(f"Prediction Reward: {prediction_reward:.3f}, Gender Reward: {gender_reward:.3f}, Total Reward: {total_reward:.3f}")
     return total_reward
 
 def get_rewards(self, labels: List[dict], responses: List[CaptionSynapse]) -> torch.FloatTensor:
