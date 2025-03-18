@@ -51,9 +51,9 @@ def load_voxpopuli_data():
     Fetch the VoxPopuli dataset for English via the Hugging Face API.
     
     Returns:
-        list: A list of examples. If the returned JSON has a "rows" key, its value is returned;
-              otherwise, the JSON itself is assumed to be a list.
+        dict: A dictionary containing dataset information with 'rows' key containing examples
     """
+    bt.logging.debug(f"Fetching dataset from: {DATASET_URL}")
     while True:
         try:
             response = requests.get(DATASET_URL)
@@ -63,7 +63,20 @@ def load_voxpopuli_data():
             bt.logging.error(f"Error fetching dataset: {e}")
             bt.logging.info("Retrying in 2 minutes...")
             time.sleep(120)  # Wait 2 minutes before retrying
+    
     data = response.json()
+    
+    # Validate the returned data has the expected structure
+    if not isinstance(data, dict) or 'rows' not in data:
+        bt.logging.warning(f"Unexpected data structure from API: {type(data)}")
+        # Try to fix the structure if possible
+        if isinstance(data, list):
+            data = {'rows': data}
+        else:
+            # Create an empty rows list as fallback
+            bt.logging.error("Could not parse data from API, using empty dataset")
+            data = {'rows': []}
+    
     # Save the raw data as JSON for debugging/reference
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     json_path = f"data/voxpopuli_data_{timestamp}.json"
@@ -73,8 +86,10 @@ def load_voxpopuli_data():
     
     with open(json_path, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2)
+    
     bt.logging.info(f"Saved raw dataset to {json_path}")
-    bt.logging.info(f"Fetched data: {json.dumps(data, indent=2)}")
+    bt.logging.info(f"Fetched {len(data.get('rows', []))} examples from API")
+    
     return data
 
 def download_audio(url: str, save_path: str) -> str:
@@ -201,16 +216,39 @@ def generate_synthetic_jobs() -> list:
             with open(data_path, 'r') as f:
                 data = json.load(f)
             bt.logging.info(f"Loaded {len(data.get('rows', []))} examples from cache")
-            # Process the loaded data instead of returning it directly
-            return process_examples(data)
+            
+            # Process the loaded data
+            jobs = process_examples(data)
+            if jobs:  # If jobs were successfully processed
+                return jobs
+            # If no jobs processed, fall through to loading fresh data
+            bt.logging.warning("No jobs processed from cache, loading fresh data")
         except Exception as e:
             bt.logging.warning(f"Error loading cached data: {e}")
             bt.logging.info("Falling back to loading fresh data")
     
     # If no valid cache found or there was an error, load fresh data
-    bt.logging.info("No cached data found, loading fresh VoxPopuli data...")
+    bt.logging.info("Loading fresh VoxPopuli data...")
     data = load_voxpopuli_data()
     jobs = process_examples(data)
+    
+    # Fallback to a hardcoded sample if no jobs could be processed
+    if not jobs:
+        bt.logging.warning("No jobs processed! Using fallback sample job.")
+        # Create a sample job with minimal data
+        fallback_job = {
+            "job_id": str(uuid.uuid4()),
+            "job_status": "not_started",
+            "job_accuracy": 0.0,
+            "normalized_text": "This is a fallback sample job.",
+            "gender": "unknown",
+            "created_at": datetime.now().isoformat(),
+            # Use empty audio to avoid download issues
+            "audio": "",  
+            "audio_path": ""
+        }
+        jobs = [fallback_job]
+    
     return jobs
 
 if __name__ == "__main__":
