@@ -118,12 +118,31 @@ def reward(self, labels: List[dict], response: CaptionSynapse) -> float:
     Returns:
       float: The final combined reward.
     """
+    # Get segments from response
     predictions = response.segments
     if predictions is None:
         return 0.0
 
+    # Check segment type and convert if needed
+    # If segments are already dictionaries, use them directly
+    # Otherwise, convert them to dictionaries using .dict() method
+    segment_dicts = []
+    for seg in predictions:
+        if isinstance(seg, dict):
+            segment_dicts.append(seg)  # Already a dict, use as is
+        else:
+            try:
+                segment_dicts.append(seg.dict())  # Try to convert to dict if it has a dict() method
+            except AttributeError:
+                bt.logging.warning(f"Segment is not a dict and has no .dict() method: {seg}")
+                # Create a basic dict with just the text if possible
+                if hasattr(seg, 'text'):
+                    segment_dicts.append({"text": seg.text})
+                else:
+                    segment_dicts.append({})  # Empty dict as fallback
+
     # Align predictions with ground truth segments
-    predictions = sort_predictions(labels, [seg.dict() for seg in predictions])
+    aligned_predictions = sort_predictions(labels, segment_dicts)
     
     # Retrieve weight factors from configuration
     alpha_text = self.config.neuron.alpha_text    # e.g., weight for text quality
@@ -134,15 +153,15 @@ def reward(self, labels: List[dict], response: CaptionSynapse) -> float:
     # Compute text reward from each segment
     section_rewards = [
         section_reward(label, pred, alpha_t=alpha_text, verbose=True)
-        for label, pred in zip(labels, predictions)
+        for label, pred in zip(labels, aligned_predictions)
     ]
     text_reward_values = [r["total"] for r in section_rewards]
     prediction_reward = torch.mean(torch.FloatTensor(text_reward_values))
     
-    # Compute time reward: assuming response has attribute time_elapsed
+    # Compute time reward
     time_reward = max(1 - response.time_elapsed / self.config.neuron.timeout, 0)
     
-    # Compute gender reward: assume ground truth is in labels[0]["gender"] and miner provides predicted_gender
+    # Compute gender reward using predicted_gender field
     gender_true = labels[0].get("gender", "").strip()
     gender_pred = getattr(response, "predicted_gender", None)
     gender_reward = get_gender_reward(gender_true, gender_pred)
