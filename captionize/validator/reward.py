@@ -156,6 +156,14 @@ def get_rewards(self, labels: List[dict], responses: List[CaptionSynapse]) -> to
     
     Returns:
       torch.FloatTensor: Tensor of computed rewards.
+      
+    Note:
+      If responses is None, returns a zero tensor of shape (1,).
+      This handles the case where dendrite.query() returns None.
     """
-    rewards = [reward(self, labels, response) for response in responses]
-    return torch.FloatTensor(rewards).to(self.device)
+    for response in responses:
+      if response is None:
+        return torch.zeros(1).to(self.device)
+      else: 
+        rewards = [reward(self, labels, response)]
+        return torch.FloatTensor(rewards).to(self.device)
