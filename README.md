@@ -139,6 +139,24 @@ Before you proceed with the installation and running of the subnet, note the fol
 ```curl http://127.0.0.1:4001/status```
 
 
+# TODO:
+- [ ] Add a miner.md to the docs directory
+- [ ] Add a validator.md to the docs directory
+- [ ] Code review and cleanup
+- [ ] Check for duplicates in the jobs
+- [ ] update the dataset to fetch more data after the first 100 rows
+- [ ] axon/ip of the miner not showing in metagraph table
+- [ ] adjust the reward function just for transcription and gender prediction
+- [ ] Move and Serve the synthetic data from the localDB or S3
+- [ ] Add ```api.py``` and expose the endpoints for a webapp
+- [ ] update the code to support Organic validation(via youtube URL, file upload or from an existing Subnet)
+- [ ] Have our own MLmodel for transcription and gender prediction (combined)
+- [ ] Leaderboard and Benchmarking the performance
+- [ ] work on reward function for the miner based of WER(Word Error Rate)
+Ex: THEY ATTACKED AND REMOVED THE VOICES OF RESISTANCE FROM OUR RADIO AND STEVIE (**TV**) STATIONS, Here the miner should not be rewarded for the incorrect transcription of "TV"
+ - [ ] work on reward function for the miner based on Punctuation,Spelling, Time of the dialouge.
+ - [ ] **PHASE 2:** Dataset to contain more data and more diverse data (bg noise,bg music, voice overlays, etc)
+
 
 ## License
 This repository is licensed under the MIT License.

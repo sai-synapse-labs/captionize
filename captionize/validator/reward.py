@@ -213,7 +213,7 @@ def reward(self, labels: List[dict], response: CaptionSynapse) -> float:
     if weight_sum <= 0:
         bt.logging.warning("Sum of weights is zero or negative, using equal weights")
         alpha_prediction = alpha_gender = 1.0
-        weight_sum = 3.0
+        weight_sum = 2.0
     
     total_reward = (alpha_prediction * prediction_reward + alpha_gender * gender_reward) / weight_sum
     
