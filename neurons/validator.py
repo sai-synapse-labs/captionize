@@ -141,11 +141,12 @@ class Validator(BaseValidatorNeuron):
         
         # Process weights for chain compatibility
         try:
-            # Make sure weights is on CPU and convert to numpy when passing to process_weights_for_netuid
-            weights_cpu = weights.detach().cpu()
+            # Convert PyTorch tensor to NumPy array (this was missing before)
+            weights_numpy = weights.detach().cpu().numpy()
+            
             processed_weight_uids, processed_weights = bt.utils.weight_utils.process_weights_for_netuid(
                 uids=self.metagraph.uids,
-                weights=weights_cpu,
+                weights=weights_numpy,  # Use the NumPy array here
                 netuid=self.config.netuid,
                 subtensor=self.subtensor,
                 metagraph=self.metagraph,
