@@ -19,7 +19,7 @@ import os
 import time
 import hashlib
 import bittensor as bt
-
+import random
 import captionize  # our project package
 from captionize.base.validator import BaseValidatorNeuron
 from captionize.validator.generate import generate_synthetic_jobs
@@ -67,27 +67,35 @@ class Validator(BaseValidatorNeuron):
         # Generate a synthetic caption job from VoxPopuli
         jobs_data = generate_synthetic_jobs()
         bt.logging.debug(f"Generated job: {jobs_data}")
-        job_synapses = []
         
-        for job in jobs_data:
-            # For scoring, create ground-truth labels using the transcript.
-            # Here, we wrap the transcript in a list of one segment with a default gender.
-            labels = [
-                { 
-                    "text": job["normalized_text"], 
-                    "gender": job["gender"]
-                }
-            ]
-            
-            # Create a CaptionSynapse with the job data.
-            synapse = captionize.protocol.CaptionSynapse(
-                job_id=job["job_id"],
-                base64_audio=job["base64_audio"],
-                audio_path=job["audio_path"],
-                language="en",
-                job_status="in_progress"
-            )
-            job_synapses.append(synapse)
+        # Select one job randomly.
+        job = random.choice(jobs_data) if jobs_data else None
+        if job is None:
+            bt.logging.error("No job generated.")
+            return
+        
+        if not isinstance(job, dict):
+            bt.logging.error("Selected job is not a dictionary. Received: {}".format(type(job)))
+            return
+
+        # Create ground-truth labels (here as a list of one segment with dummy timing)
+        labels = [
+            { 
+                "start_time": 0.0, 
+                "end_time": 0.0, 
+                "text": job.get("normalized_text", ""), 
+                "gender": job.get("gender", "unknown")
+            }
+        ]
+        
+        # Create a CaptionSynapse with the job data.
+        synapse = captionize.protocol.CaptionSynapse(
+            job_id=job.get("job_id"),
+            base64_audio=job.get("audio"),
+            audio_path=job.get("audio_path"),
+            language="en",
+            miner_state="in_progress"
+        )
         
         # Query miners with the synapse. Assume dendrite.query returns a list of responses.
         responses = await self.dendrite.forward(
@@ -108,7 +116,8 @@ class Validator(BaseValidatorNeuron):
         
         # Update miner scores using the computed rewards (update_scores must be implemented in BaseValidatorNeuron)
         self.update_scores(rewards, miner_uids)
-
+        
+        return synapse
 if __name__ == "__main__":
     with Validator() as validator:
         while True:
