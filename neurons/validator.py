@@ -65,20 +65,29 @@ class Validator(BaseValidatorNeuron):
         bt.logging.debug(f"Miner UIDs: {miner_uids}")
         
         # Generate a synthetic caption job from VoxPopuli
-        job_data = generate_synthetic_jobs()
-        bt.logging.debug(f"Generated job: {job_data}")
+        jobs_data = generate_synthetic_jobs()
+        bt.logging.debug(f"Generated job: {jobs_data}")
+        job_synapses = []
         
-        # For scoring, create ground-truth labels using the transcript.
-        # Here, we wrap the transcript in a list of one segment with a default gender.
-        labels = [{"start_time": 0.0, "end_time": 0.0, "text": job_data["transcript"], "gender": "unknown"}]
-        
-        # Create a CaptionSynapse with the job data.
-        synapse = captionize.protocol.CaptionSynapse(
-            job_id=job_data["job_id"],
-            base64_audio=job_data["base64_audio"],
-            audio_path=job_data["audio_path"],
-            language="en"
-        )
+        for job in jobs_data:
+            # For scoring, create ground-truth labels using the transcript.
+            # Here, we wrap the transcript in a list of one segment with a default gender.
+            labels = [
+                { 
+                    "text": job["normalized_text"], 
+                    "gender": job["gender"]
+                }
+            ]
+            
+            # Create a CaptionSynapse with the job data.
+            synapse = captionize.protocol.CaptionSynapse(
+                job_id=job["job_id"],
+                base64_audio=job["base64_audio"],
+                audio_path=job["audio_path"],
+                language="en",
+                job_status="in_progress"
+            )
+            job_synapses.append(synapse)
         
         # Query miners with the synapse. Assume dendrite.query returns a list of responses.
         responses = self.dendrite.query(

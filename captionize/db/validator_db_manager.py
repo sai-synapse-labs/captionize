@@ -65,7 +65,7 @@ class ValidatorDBManager:
         create_jobs_sql = f"""
         CREATE TABLE IF NOT EXISTS {TABLE_NAME} (
             job_id TEXT PRIMARY KEY, #random generation Unique ID for the job
-            job_status TEXT, #not_done, done, failed
+            job_status TEXT, #not_started, in_progress, done, failed
             job_accuracy REAL, #calculated by the validator
             base64_audio TEXT,  #To generate
             transcript_miner TEXT, #from the miner

@@ -64,13 +64,13 @@ class Miner(BaseMinerNeuron):
         """
         Process the incoming CaptionSynapse request.
         
-        If the job has not been processed (i.e. miner_state is not "done"),
+        If the job has not been processed (i.e. job_status is not "done"),
         it:
           - Obtains the audio file path from synapse (or decodes the base64_audio to a temporary file).
           - Uses SpeechBrain to transcribe the audio.
           - Uses the voice gender classifier to predict gender.
           - Updates the synapse with a transcript (wrapped as a single segment) and predicted gender.
-          - Updates miner_state to "done" and records the time_elapsed.
+          - Updates job_status to "done" and records the time_elapsed.
         
         Args:
             synapse (CaptionSynapse): The synapse with incoming job data.
@@ -79,8 +79,8 @@ class Miner(BaseMinerNeuron):
             CaptionSynapse: The synapse with attached transcription results and gender prediction.
         """
         start_time = time.time()
-        # Process only if miner_state is not "done"
-        if synapse.miner_state not in ["done"]:
+        # Process only if job_status is not "done"
+        if synapse.job_status not in ["done"]:
             # Use audio_path if provided; otherwise, decode base64_audio and write to a temporary file.
             if synapse.audio_path and os.path.exists(synapse.audio_path):
                 audio_file = synapse.audio_path
@@ -98,7 +98,7 @@ class Miner(BaseMinerNeuron):
                 predicted_gender = self.gender_model.predict(audio_file, device=self.device)
             except Exception as e:
                 bt.logging.warning(f"Error during transcription/gender recognition: {e}")
-                synapse.miner_state = "failed"
+                synapse.job_status = "failed"
                 transcript = ""
                 predicted_gender = None
 
@@ -108,13 +108,13 @@ class Miner(BaseMinerNeuron):
 
             # Update synapse with transcription result and predicted gender.
             synapse.segments = [{
-                "start_time": 0.0,   # Dummy timing; adjust if you have actual alignment.
-                "end_time": 0.0,
+                # "start_time": 0.0,   # Dummy timing; adjust if you have actual alignment.
+                # "end_time": 0.0,
                 "text": transcript,
                 "gender": predicted_gender
             }]
-            synapse.miner_state = "done"
             synapse.time_elapsed = time.time() - start_time
+            synapse.job_status = "done"
         else:
             bt.logging.info("Job already processed; skipping transcription.")
         return synapse

@@ -33,7 +33,7 @@ class CaptionSynapse(bt.Synapse):
             - "end_time": (float) the end time of the segment in seconds,
             - "text": (str) the transcribed text.
             - "gender": (str) the gender of the speaker.      
-      - miner_state: Optional status information from the miner.
+      - job_status: Optional status information from the miner.
       - time_elapsed: A class-level attribute representing the processing time (not stored as a model field).
     """
     time_elapsed: ClassVar[float] = 0.0
@@ -43,7 +43,7 @@ class CaptionSynapse(bt.Synapse):
     audio_path: Optional[str] = None
     language: Optional[str] = "en"
     segments: Optional[List[dict]] = None    # Each dict: {"start_time": float, "end_time": float, "text": str, "gender": str}    
-    miner_state: Optional[str] = None
+    job_status: Optional[str] = None
 
     def deserialize(self) -> "CaptionSynapse":
         """

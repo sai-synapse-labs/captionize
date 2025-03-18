@@ -101,7 +101,7 @@ def process_examples(jobs) -> list:
         row = row_data["row"]
         
         job_id = row.get("audio_id", str(uuid.uuid4()))
-        job_status = "completed"  # Assuming completed for now
+        job_status = "not_started"  # Assuming completed for now
         job_accuracy = 0.0
         
         # Download audio file
