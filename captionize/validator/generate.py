@@ -29,6 +29,7 @@ import uuid
 import base64
 import random
 import json
+import time
 import bittensor as bt
 from datetime import datetime
 import requests
@@ -53,8 +54,15 @@ def load_voxpopuli_data():
         list: A list of examples. If the returned JSON has a "rows" key, its value is returned;
               otherwise, the JSON itself is assumed to be a list.
     """
-    response = requests.get(DATASET_URL)
-    response.raise_for_status()
+    while True:
+        try:
+            response = requests.get(DATASET_URL)
+            response.raise_for_status()
+            break
+        except Exception as e:
+            bt.logging.error(f"Error fetching dataset: {e}")
+            bt.logging.info("Retrying in 5 minutes...")
+            time.sleep(300)  # Wait 5 minutes before retrying
     data = response.json()
     bt.logging.info(f"Fetched data: {json.dumps(data, indent=2)}")
     return data
