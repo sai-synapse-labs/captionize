@@ -77,20 +77,17 @@ def load_voxpopuli_data():
     bt.logging.info(f"Fetched data: {json.dumps(data, indent=2)}")
     return data
 
-def download_audio(url, save_path):
+def download_audio(url: str, save_path: str) -> str:
     """Download the audio file and save it locally."""
     response = requests.get(url)
-    if response.status_code == 200:
-        with open(save_path, "wb") as file:
-            file.write(response.content)
-        bt.logging.debug(f"Downloaded audio to {save_path}")
-        return save_path
-    else:
-        bt.logging.error(f"Failed to download audio from {url}: {response.status_code}")
-        return None
+    response.raise_for_status()
+    with open(save_path, "wb") as file:
+        file.write(response.content)
+    bt.logging.debug(f"Downloaded audio to {save_path}")
+    return save_path
 
-def encode_audio_to_base64(file_path):
-    """Convert an audio file to Base64."""
+def encode_audio_to_base64(file_path: str) -> str:
+    """Convert an audio file to a base64-encoded string."""
     if not os.path.exists(file_path):
         bt.logging.error(f"Audio file not found at {file_path}")
         return None
@@ -98,7 +95,7 @@ def encode_audio_to_base64(file_path):
         return base64.b64encode(file.read()).decode()
     
 
-def process_examples(jobs) -> list:
+def process_examples(data: dict) -> list:
     """
     Process a list of VoxPopuli examples into a list of job dictionaries.
     
@@ -114,22 +111,49 @@ def process_examples(jobs) -> list:
               job_id, audio (base64), normalized_text, gender.
     """
     processed_jobs = []
+    rows = data.get("rows", [])
+    if not rows:
+        raise ValueError("No rows returned from dataset")
     
-    for row_data in jobs["rows"]:
-        row = row_data["row"]
+    bt.logging.debug(f"Number of examples: {len(rows)}")
+    
+    for idx, row_data in enumerate(rows):
+        if not isinstance(row_data, dict):
+            bt.logging.error(f"Expected dict for row_data but got {type(row_data)}: {row_data}")
+            continue
+        # Use the value under "row" if it exists, otherwise assume row_data is the row.
+        row = row_data.get("row", row_data)
+        if not isinstance(row, dict):
+            bt.logging.error(f"Expected dict for row but got {type(row)}: {row}")
+            continue
         
         job_id = row.get("audio_id", str(uuid.uuid4()))
-        job_status = "not_started"  # Assuming completed for now
+        job_status = "not_started"
         job_accuracy = 0.0
         
-        # Download audio file
-        audio_url = row["audio"][0]["src"]
-        local_audio_path = f"downloads/{job_id}.wav"
+        # Get the audio URL from the first element in the "audio" list.
+        audio_list = row.get("audio", [])
+        if not audio_list:
+            bt.logging.error("No audio entries available in example")
+            continue
+        audio_url = audio_list[0].get("src")
+        if not audio_url:
+            bt.logging.error("Audio URL not found in first audio entry")
+            continue
+
+        # Download the audio and encode it to base64.
+        local_audio_path = os.path.join("downloads", f"{job_id}.wav")
         os.makedirs("downloads", exist_ok=True)
-        saved_path = download_audio(audio_url, local_audio_path)
+        try:
+            saved_path = download_audio(audio_url, local_audio_path)
+        except Exception as e:
+            bt.logging.error(f"Error downloading audio for job {job_id}: {e}")
+            continue
         
-        # Encode audio file in Base64
-        audio_base64 = encode_audio_to_base64(saved_path) if saved_path else None
+        audio_base64 = encode_audio_to_base64(saved_path)
+        if audio_base64 is None:
+            bt.logging.error(f"Error encoding audio for job {job_id}")
+            continue
         
         transcript = row.get("normalized_text", "")
         gender = row.get("gender", "unknown")
@@ -139,13 +163,13 @@ def process_examples(jobs) -> list:
             "job_id": job_id,
             "job_status": job_status,
             "job_accuracy": job_accuracy,
-            "base64_audio": audio_base64,
+            "audio": audio_base64,
             "audio_path": saved_path,
             "normalized_text": transcript,
             "gender": gender,
             "created_at": created_at
         }
-        
+        bt.logging.info(f"Processed job {job_id} from example index {idx}.")
         processed_jobs.append(job_dict)
     
     return processed_jobs
