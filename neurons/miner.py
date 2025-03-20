@@ -2,14 +2,14 @@
 # Copyright © 2023 Yuma Rao
 
 # Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated
-# documentation files (the “Software”), to deal in the Software without restriction, including without limitation
+# documentation files (the "Software"), to deal in the Software without restriction, including without limitation
 # the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software,
 # and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
 
 # The above copyright notice and this permission notice shall be included in all copies or substantial portions of
 # the Software.
 
-# THE SOFTWARE IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO
 # THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
 # THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
 # OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
@@ -111,18 +111,25 @@ class Miner(BaseMinerNeuron):
                     try:
                         # Ensure model is on the right device
                         self.asr_model.to(used_device)
+                        bt.logging.info(f"Starting transcription on GPU for file: {audio_file}")
                         transcript = self.asr_model.transcribe_file(audio_file)
+                        bt.logging.info(f"Transcription completed successfully on GPU")
                         bt.logging.debug(f"Transcription result (GPU): '{transcript}'")
                     except Exception as gpu_err:
                         # Fall back to CPU if GPU fails
                         bt.logging.warning(f"GPU transcription failed, falling back to CPU: {gpu_err}")
                         used_device = torch.device("cpu")
                         self.asr_model.to(used_device)
+                        bt.logging.info(f"Starting transcription on CPU for file: {audio_file}")
                         transcript = self.asr_model.transcribe_file(audio_file)
+                        bt.logging.info(f"Transcription completed successfully on CPU")
                         bt.logging.debug(f"Transcription result (CPU fallback): '{transcript}'")
                 else:
                     # Use CPU directly if that's our primary device
+                    bt.logging.info(f"Starting transcription on CPU for file: {audio_file}")
                     transcript = self.asr_model.transcribe_file(audio_file)
+                    bt.logging.info(f"Transcription completed successfully on CPU")
+                    bt.logging.debug(f"Transcription result (CPU): '{transcript}'")
                     
                 # Try gender prediction on same device as successful transcription
                 try:
