@@ -2,14 +2,14 @@
 # Copyright © 2023 Yuma Rao
 
 # Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated
-# documentation files (the “Software”), to deal in the Software without restriction, including without limitation
+# documentation files (the "Software"), to deal in the Software without restriction, including without limitation
 # the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software,
 # and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
 
 # The above copyright notice and this permission notice shall be included in all copies or substantial portions of
 # the Software.
 
-# THE SOFTWARE IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO
 # THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
 # THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
 # OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
@@ -34,6 +34,7 @@ import bittensor as bt
 from datetime import datetime
 import requests
 from dotenv import load_dotenv
+from pathlib import Path
 
 # Load environment variables from .env file
 load_dotenv()
@@ -43,20 +44,70 @@ RQLITE_HTTP_ADDR = os.getenv("RQLITE_HTTP_ADDR", "127.0.0.1:4001")
 DB_BASE_URL = f"http://{RQLITE_HTTP_ADDR}"
 TABLE_NAME = "jobs"
 
-# Use the rows endpoint; adjust parameters if needed.
-DATASET_URL = "https://datasets-server.huggingface.co/rows?dataset=facebook%2Fvoxpopuli&config=en&split=train&offset=0&length=100"
+# Replace the static DATASET_URL with a function that generates the URL with dynamic offset
+def get_dataset_url(offset=0, length=100):
+    """Generate dataset URL with dynamic offset and length parameters."""
+    return f"https://datasets-server.huggingface.co/rows?dataset=facebook%2Fvoxpopuli&config=en&split=train&offset={offset}&length={length}"
 
-def load_voxpopuli_data():
+# Add a function to track and update the current offset
+def get_next_offset(length=100):
+    """
+    Get the next offset to use for data fetching.
+    Reads the last used offset from a tracking file and increments it.
+    
+    Args:
+        length: Number of examples to fetch in each batch
+        
+    Returns:
+        int: The next offset to use
+    """
+    offset_file = Path("data/offset_tracker.json")
+    
+    # Create directory if it doesn't exist
+    offset_file.parent.mkdir(exist_ok=True)
+    
+    # Default starting offset
+    current_offset = 0
+    
+    # Read current offset if file exists
+    if offset_file.exists():
+        try:
+            with open(offset_file, 'r') as f:
+                tracker_data = json.load(f)
+                current_offset = tracker_data.get('last_offset', 0) + tracker_data.get('last_length', length)
+        except Exception as e:
+            bt.logging.warning(f"Error reading offset tracker: {e}. Starting from offset 0.")
+    
+    # Update the tracker file with new offset
+    with open(offset_file, 'w') as f:
+        json.dump({
+            'last_offset': current_offset,
+            'last_length': length,
+            'updated_at': datetime.now().isoformat()
+        }, f, indent=2)
+    
+    bt.logging.info(f"Using offset {current_offset} for this data fetch")
+    return current_offset
+
+# Modify the load_voxpopuli_data function to use dynamic offset
+def load_voxpopuli_data(length=100):
     """
     Fetch the VoxPopuli dataset for English via the Hugging Face API.
+    Uses a dynamic offset to fetch new examples each time.
     
+    Args:
+        length: Number of examples to fetch
+        
     Returns:
         dict: A dictionary containing dataset information with 'rows' key containing examples
     """
-    bt.logging.debug(f"Fetching dataset from: {DATASET_URL}")
+    offset = get_next_offset(length)
+    dataset_url = get_dataset_url(offset, length)
+    
+    bt.logging.debug(f"Fetching dataset from: {dataset_url}")
     while True:
         try:
-            response = requests.get(DATASET_URL)
+            response = requests.get(dataset_url)
             response.raise_for_status()
             break
         except Exception as e:
@@ -88,7 +139,7 @@ def load_voxpopuli_data():
         json.dump(data, f, indent=2)
     
     bt.logging.info(f"Saved raw dataset to {json_path}")
-    bt.logging.info(f"Fetched {len(data.get('rows', []))} examples from API")
+    bt.logging.info(f"Fetched {len(data.get('rows', []))} examples from API (offset: {offset}, length: {length})")
     
     return data
 
@@ -189,11 +240,15 @@ def process_examples(data: dict) -> list:
     
     return processed_jobs
 
-def generate_synthetic_jobs() -> list:
+def generate_synthetic_jobs(use_cache=True, length=100) -> list:
     """
     Generate synthetic caption jobs:
       - Loads VoxPopuli dataset (English, train split) via the API.
       - Processes all available examples in the fetched data into job dictionaries.
+    
+    Args:
+        use_cache: Whether to use cached data if available
+        length: Number of examples to fetch in each batch
     
     Returns:
         list: A list of job dictionaries.
@@ -206,7 +261,7 @@ def generate_synthetic_jobs() -> list:
     # Find any existing voxpopuli data files
     existing_files = [f for f in os.listdir(data_dir) if f.startswith("voxpopuli_data_") and f.endswith(".json")]
     
-    if existing_files:
+    if use_cache and existing_files:
         # Use the most recent file if multiple exist
         latest_file = max(existing_files)
         data_path = os.path.join(data_dir, latest_file)
@@ -229,7 +284,7 @@ def generate_synthetic_jobs() -> list:
     
     # If no valid cache found or there was an error, load fresh data
     bt.logging.info("Loading fresh VoxPopuli data...")
-    data = load_voxpopuli_data()
+    data = load_voxpopuli_data(length=length)
     jobs = process_examples(data)
     
     # Fallback to a hardcoded sample if no jobs could be processed
@@ -253,8 +308,9 @@ def generate_synthetic_jobs() -> list:
 
 if __name__ == "__main__":
     try:
-        jobs = generate_synthetic_jobs()
-        bt.logging.info("Generated Synthetic Jobs:")
-        bt.logging.debug(json.dumps(jobs, indent=2))
+        # Set use_cache=False to always get fresh data with new offset
+        jobs = generate_synthetic_jobs(use_cache=False, length=100)
+        bt.logging.info(f"Generated {len(jobs)} Synthetic Jobs")
+        bt.logging.debug(json.dumps(jobs[:2], indent=2))  # Show just first 2 for brevity
     except Exception as e:
         bt.logging.error(f"Error generating synthetic jobs: {e}")
