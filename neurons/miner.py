@@ -15,164 +15,182 @@
 # OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 # DEALINGS IN THE SOFTWARE.
 
+import os
 import time
+import uuid
+import base64
+import asyncio
 import typing
+import torch
 import bittensor as bt
-import pytesseract
 
-# Bittensor OCR Miner
-import captionize
 
-from dotenv import load_dotenv
-
-# import base miner class which takes care of most of the boilerplate
+# Import our protocol and base miner class
+from captionize.protocol import CaptionSynapse
 from captionize.base.miner import BaseMinerNeuron
 
+# Import SpeechBrain ASR model and the voice gender classifier from Hugging Face
+from speechbrain.inference.ASR import EncoderDecoderASR
+from captionize.model.base_GRM import ECAPA_gender
 
 class Miner(BaseMinerNeuron):
     """
-    OCR miner neuron class. You may also want to override the blacklist and priority functions according to your needs.
-
-    This class inherits from the BaseMinerNeuron class, which in turn inherits from BaseNeuron. The BaseNeuron class takes care of routine tasks such as setting up wallet, subtensor, metagraph, logging directory, parsing config, etc. You can override any of the methods in BaseNeuron if you need to customize the behavior.
-
-    This class provides reasonable default behavior for a miner such as blacklisting unrecognized hotkeys, prioritizing requests based on stake, and forwarding requests to the forward function. If you need to define custom
+    Captionise miner neuron class.
+    This miner uses SpeechBrain for transcription and a pretrained voice gender classifier
+    to predict speaker gender. It processes incoming CaptionSynapse requests and returns a synapse
+    containing the transcript, predicted gender, and processing time.
     """
 
     def __init__(self, config=None):
         super(Miner, self).__init__(config=config)
 
-        bt.logging.info(f'pytesseract version: {pytesseract.__version__}')
-        bt.logging.info(f'tesseract version: {pytesseract.get_tesseract_version()}')
+        # Determine device - prefer GPU for performance
+        try:
+            self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+            bt.logging.info(f"Using device: {self.device}")
+        except:
+            self.device = torch.device("cpu")
+            bt.logging.warning("Error setting device, falling back to CPU")
 
+        # Load models with careful error handling
+        try:
+            # Load SpeechBrain ASR model for transcription
+            asr_source = "speechbrain/asr-crdnn-rnnlm-librispeech"
+            self.asr_model = EncoderDecoderASR.from_hparams(source=asr_source, savedir="pretrained_models/asr-crdnn-rnnlm-librispeech")
+            self.asr_model.eval()
+            
+            # Load the pretrained voice gender classifier
+            self.gender_model = ECAPA_gender.from_pretrained("JaesungHuh/voice-gender-classifier")
+            self.gender_model.eval()
+            
+            # Try to move models to GPU (with fallback to CPU)
+            if self.device.type == 'cuda':
+                try:
+                    self.asr_model.to(self.device)
+                    self.gender_model.to(self.device)
+                    bt.logging.info(f"Models moved to {self.device}")
+                except Exception as e:
+                    bt.logging.warning(f"Failed to move models to {self.device}: {e}")
+                    self.device = torch.device("cpu")
+                    bt.logging.info("Falling back to CPU")
+            
+            bt.logging.info(f"Loaded ASR model from {asr_source} and voice gender classifier on {self.device}")
+        except Exception as e:
+            bt.logging.error(f"Error initializing models: {e}")
+            import traceback
+            bt.logging.debug(traceback.format_exc())
+            raise
 
-
-    async def forward(
-        self, synapse: captionize.protocol.OCRSynapse
-    ) -> captionize.protocol.OCRSynapse:
+    async def forward(self, synapse: CaptionSynapse) -> CaptionSynapse:
         """
-        Processes the incoming OCR synapse and attaches the response to the synapse.
-
-        Args:
-            synapse (ocr_subnet.protocol.OCRSynapse): The synapse object containing the image data. 
-
-        Returns:
-            ocr_subnet.protocol.OCRSynapse: The synapse object with the 'response' field set to the extracted data.
-
+        Process the incoming CaptionSynapse request with GPU acceleration and fallbacks.
         """
-        # Get image data
-        image = captionize.utils.image.deserialize(base64_string=synapse.base64_image)
+        start_time = time.time()
+        if synapse.job_status not in ["done"]:
+            # Get or create audio file
+            if synapse.audio_path and os.path.exists(synapse.audio_path):
+                audio_file = synapse.audio_path
+            else:
+                temp_filename = f"/tmp/{uuid.uuid4()}.wav"
+                audio_bytes = base64.b64decode(synapse.base64_audio)
+                with open(temp_filename, "wb") as f:
+                    f.write(audio_bytes)
+                audio_file = temp_filename
 
-        # Use pytesseract to get the data
-        data = pytesseract.image_to_data(image, output_type=pytesseract.Output.DICT)
+            transcript = ""
+            predicted_gender = "unknown"
+            used_device = self.device  # Start with configured device
+            
+            # Process with error handling and GPU fallback
+            try:
+                # Try transcription with current device setting
+                bt.logging.debug(f"Transcribing file using {used_device}: {audio_file}")
+                
+                # Try using GPU first
+                if used_device.type == 'cuda':
+                    try:
+                        # Ensure model is on the right device
+                        self.asr_model.to(used_device)
+                        transcript = self.asr_model.transcribe_file(audio_file)
+                        bt.logging.debug(f"Transcription result (GPU): '{transcript}'")
+                    except Exception as gpu_err:
+                        # Fall back to CPU if GPU fails
+                        bt.logging.warning(f"GPU transcription failed, falling back to CPU: {gpu_err}")
+                        used_device = torch.device("cpu")
+                        self.asr_model.to(used_device)
+                        transcript = self.asr_model.transcribe_file(audio_file)
+                        bt.logging.debug(f"Transcription result (CPU fallback): '{transcript}'")
+                else:
+                    # Use CPU directly if that's our primary device
+                    transcript = self.asr_model.transcribe_file(audio_file)
+                    
+                # Try gender prediction on same device as successful transcription
+                try:
+                    bt.logging.debug(f"Predicting gender on {used_device} from file: {audio_file}")
+                    # Move gender model to same device as successful transcription
+                    self.gender_model.to(used_device)
+                    if hasattr(self.gender_model, 'device'):
+                        # Some models have internal device tracking
+                        self.gender_model.device = used_device
+                    predicted_gender = self.gender_model.predict(audio_file, device=used_device)
+                    bt.logging.debug(f"Gender prediction result: {predicted_gender}")
+                except Exception as e:
+                    # Fall back to CPU for gender prediction if needed
+                    bt.logging.warning(f"Gender prediction on {used_device} failed: {e}")
+                    if used_device.type == 'cuda':
+                        bt.logging.info("Trying gender prediction on CPU instead")
+                        try:
+                            self.gender_model.to('cpu')
+                            if hasattr(self.gender_model, 'device'):
+                                self.gender_model.device = torch.device('cpu')
+                            predicted_gender = self.gender_model.predict(audio_file, device='cpu')
+                            bt.logging.debug(f"Gender prediction result (CPU fallback): {predicted_gender}")
+                        except Exception as e2:
+                            bt.logging.error(f"CPU fallback gender prediction also failed: {e2}")
+                            predicted_gender = "unknown"
+                    else:
+                        predicted_gender = "unknown"
+                    
+            except Exception as e:
+                bt.logging.error(f"Error during processing: {e}")
+                import traceback
+                bt.logging.debug(traceback.format_exc())
+                synapse.job_status = "failed"
 
-        response = []
-        for i in range(len(data['text'])):
-            if data['text'][i].strip() != '':  # This filters out empty text results
-                x1, y1, width, height = data['left'][i], data['top'][i], data['width'][i], data['height'][i]
-                if width * height < 10:  # This filters out small boxes (likely noise)
-                    continue
+            # Cleanup temp file
+            if (not synapse.audio_path) and os.path.exists(audio_file):
+                os.remove(audio_file)
 
-                x2, y2 = x1 + width, y1 + height
-
-                # Here we don't have font information, so we'll omit that.
-                # Pytesseract does not extract font family or size information.
-                entry = {
-                    'position': [x1, y1, x2, y2],
-                    'text': data['text'][i]
-                }
-                response.append(entry)
-
-        # Merge together words into sections, which are on the same line (same y value) and are close together (small distance in x)
-        response = captionize.utils.process.group_and_merge_boxes(response)
-
-        # Sort sections by y, then sort by x so that they read left to right and top to bottom
-        response = sorted(response, key=lambda item: (item['position'][1], item['position'][0]))
-
-        # Attach response to synapse and return it.
-        synapse.response = response
-
+            # Update synapse with results
+            synapse.segments = [{"text": transcript}]
+            synapse.predicted_gender = predicted_gender
+            synapse.time_elapsed = time.time() - start_time
+            synapse.job_status = "done"
+            
         return synapse
 
-    async def blacklist(
-        self, synapse: captionize.protocol.OCRSynapse
-    ) -> typing.Tuple[bool, str]:
+    async def blacklist(self, synapse: CaptionSynapse) -> typing.Tuple[bool, str]:
         """
-        Determines whether an incoming request should be blacklisted and thus ignored. Your implementation should
-        define the logic for blacklisting requests based on your needs and desired security parameters.
-
-        Blacklist runs before the synapse data has been deserialized (i.e. before synapse.data is available).
-        The synapse is instead contructed via the headers of the request. It is important to blacklist
-        requests before they are deserialized to avoid wasting resources on requests that will be ignored.
-
-        Args:
-            synapse (template.protocol.OCRSynapse): A synapse object constructed from the headers of the incoming request.
-
-        Returns:
-            Tuple[bool, str]: A tuple containing a boolean indicating whether the synapse's hotkey is blacklisted,
-                            and a string providing the reason for the decision.
-
-        This function is a security measure to prevent resource wastage on undesired requests. It should be enhanced
-        to include checks against the metagraph for entity registration, validator status, and sufficient stake
-        before deserialization of synapse data to minimize processing overhead.
-
-        Example blacklist logic:
-        - Reject if the hotkey is not a registered entity within the metagraph.
-        - Consider blacklisting entities that are not validators or have insufficient stake.
-
-        In practice it would be wise to blacklist requests from entities that are not validators, or do not have
-        enough stake. This can be checked via metagraph.S and metagraph.validator_permit. You can always attain
-        the uid of the sender via a metagraph.hotkeys.index( synapse.dendrite.hotkey ) call.
-
-        Otherwise, allow the request to be processed further.
+        Determine if a request should be blacklisted.
+        For now, this simple logic blacklists unrecognized hotkeys.
         """
-        # TODO(developer): Define how miners should blacklist requests.
         if synapse.dendrite.hotkey not in self.metagraph.hotkeys:
-            # Ignore requests from unrecognized entities.
-            bt.logging.trace(
-                f"Blacklisting unrecognized hotkey {synapse.dendrite.hotkey}"
-            )
+            bt.logging.trace(f"Blacklisting unrecognized hotkey {synapse.dendrite.hotkey}")
             return True, "Unrecognized hotkey"
+        bt.logging.trace(f"Hotkey recognized: {synapse.dendrite.hotkey}")
+        return False, "Hotkey recognized"
 
-        bt.logging.trace(
-            f"Not Blacklisting recognized hotkey {synapse.dendrite.hotkey}"
-        )
-        return False, "Hotkey recognized!"
-
-    async def priority(self, synapse: captionize.protocol.OCRSynapse) -> float:
+    async def priority(self, synapse: CaptionSynapse) -> float:
         """
-        The priority function determines the order in which requests are handled. More valuable or higher-priority
-        requests are processed before others. You should design your own priority mechanism with care.
-
-        This implementation assigns priority to incoming requests based on the calling entity's stake in the metagraph.
-
-        Args:
-            synapse (template.protocol.OCRSynapse): The synapse object that contains metadata about the incoming request.
-
-        Returns:
-            float: A priority score derived from the stake of the calling entity.
-
-        Miners may recieve messages from multiple entities at once. This function determines which request should be
-        processed first. Higher values indicate that the request should be processed first. Lower values indicate
-        that the request should be processed later.
-
-        Example priority logic:
-        - A higher stake results in a higher priority value.
+        Determine the priority for an incoming request based on the caller's stake.
         """
-        # TODO(developer): Define how miners should prioritize requests.
-        caller_uid = self.metagraph.hotkeys.index(
-            synapse.dendrite.hotkey
-        )  # Get the caller index.
-        prirority = float(
-            self.metagraph.S[caller_uid]
-        )  # Return the stake as the priority.
-        bt.logging.trace(
-            f"Prioritizing {synapse.dendrite.hotkey} with value: ", prirority
-        )
-        return prirority
+        caller_uid = self.metagraph.hotkeys.index(synapse.dendrite.hotkey)
+        priority = float(self.metagraph.S[caller_uid])
+        bt.logging.trace(f"Priority for {synapse.dendrite.hotkey}: {priority}")
+        return priority
 
-
-# This is the main function, which runs the miner.
 if __name__ == "__main__":
+    # Running the miner in standalone mode for testing.
     with Miner() as miner:
         while True:
             bt.logging.info("Miner running...", time.time())

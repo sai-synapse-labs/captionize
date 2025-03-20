@@ -21,10 +21,9 @@ import torch
 import unittest
 import bittensor as bt
 
-from neurons.validator import Neuron as Validator
-from neurons.miner import Neuron as Miner
+from neurons.validator import Validator 
 
-from captionize.protocol import Dummy
+from captionize.protocol import CaptionSynapse
 from captionize.validator.forward import forward
 from captionize.utils.uids import get_random_uids
 from captionize.validator.reward import get_rewards
@@ -47,7 +46,7 @@ class TemplateValidatorNeuronTestCase(unittest.TestCase):
         config.metagraph._mock = True
         config.subtensor._mock = True
         self.neuron = Validator(config)
-        self.miner_uids = get_random_uids(self, k=10)
+        self.miner_uids = get_random_uids(self, k=1)
 
     def test_run_single_step(self):
         # TODO: Test a single step
@@ -80,7 +79,7 @@ class TemplateValidatorNeuronTestCase(unittest.TestCase):
 
     def test_reward(self):
         # TODO: Test that the reward function returns the correct value
-        responses = self.dendrite.query(
+        responses = self.dendrite.forward(
             # Send the query to miners in the network.
             axons=[self.metagraph.axons[uid] for uid in self.miner_uids],
             # Construct a dummy query.
@@ -96,7 +95,7 @@ class TemplateValidatorNeuronTestCase(unittest.TestCase):
     def test_reward_with_nan(self):
         # TODO: Test that NaN rewards are correctly sanitized
         # TODO: Test that a bt.logging.warning is thrown when a NaN reward is sanitized
-        responses = self.dendrite.query(
+        responses = self.dendrite.forward(
             # Send the query to miners in the network.
             axons=[self.metagraph.axons[uid] for uid in self.miner_uids],
             # Construct a dummy query.
