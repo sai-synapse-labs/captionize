@@ -29,14 +29,14 @@ def check_config(cls, config: "bt.Config"):
 
     full_path = os.path.expanduser(
         "{}/{}/{}/netuid{}/{}".format(
-            config.logging.logging_dir,  # TODO: change from ~/.bittensor/miners to ~/.bittensor/neurons
+            "~/.bittensor/neurons",  # TODO: change from ~/.bittensor/miners to ~/.bittensor/neurons
             config.wallet.name,
             config.wallet.hotkey,
             config.netuid,
             config.neuron.name,
         )
     )
-    print("full path:", full_path)
+    bt.logging.info("full path:", full_path)
     config.neuron.full_path = os.path.expanduser(full_path)
     if not os.path.exists(config.neuron.full_path):
         os.makedirs(config.neuron.full_path, exist_ok=True)
@@ -80,12 +80,19 @@ def add_args(cls, parser):
         help="Device to run on.",
         default="cpu",
     )
+    
+    parser.add_argument(
+        "--neuron.metagraph_resync_length",
+        type=int,
+        help="The number of blocks until metagraph is resynced.",
+        default=100,
+    )
 
     parser.add_argument(
         "--neuron.epoch_length",
         type=int,
         help="The default epoch length (how often we set weights, measured in 12 second blocks).",
-        default=100,
+        default=150,
     )
 
     parser.add_argument(
@@ -101,6 +108,8 @@ def add_args(cls, parser):
         help="If set, we dont save events to a log file.",
         default=False,
     )
+    
+    
 
     if neuron_type == "validator":
         parser.add_argument(
@@ -114,8 +123,10 @@ def add_args(cls, parser):
             "--neuron.sample_size",
             type=int,
             help="The number of miners to query in a single step.",
-            default=10,
+            default=1,
         )
+        
+        
 
         parser.add_argument(
             "--neuron.disable_set_weights",
@@ -145,7 +156,42 @@ def add_args(cls, parser):
             "--neuron.vpermit_tao_limit",
             type=int,
             help="The maximum number of TAO allowed to query a validator with a vpermit.",
-            default=4096,
+            default=1024,
+        )
+        
+        parser.add_argument(
+        "--wandb.off",
+        action="store_true",
+        help="Turn off wandb.",
+        default=True,
+        )
+
+        parser.add_argument(
+            "--wandb.offline",
+            action="store_true",
+            help="Runs wandb in offline mode.",
+            default=False,
+        )
+
+        parser.add_argument(
+            "--wandb.notes",
+            type=str,
+            help="Notes to add to the wandb run.",
+            default="",
+        )
+        
+        parser.add_argument(
+            "--wandb.project_name",
+            type=str,
+            default="captionize-validator",
+            help="Wandb project to log to.",
+        )
+
+        parser.add_argument(
+            "--wandb.entity",
+            type=str,
+            default="captionize",
+            help="Wandb entity to log to.",
         )
 
     else:

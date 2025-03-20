@@ -17,32 +17,45 @@
 
 
 import bittensor as bt
-from typing import Optional, List
+from typing import Optional, List, ClassVar, Dict
 
-class OCRSynapse(bt.Synapse):
+
+class CaptionSynapse(bt.Synapse):
     """
-    A simple OCR synapse protocol representation which uses bt.Synapse as its base.
-    This protocol enables communication between the miner and the validator.
-
-    Attributes:
-    - base64_image: Base64 encoding of pdf image to be processed by the miner.
-    - response: List[dict] containing data extracted from the image.
+    A caption synapse protocol for the Captionise subnet.
+    
+    This synapse enables communication between miners and validators by carrying:
+      - job_id: A unique identifier for the captioning task.
+      - base64_audio: The audio data (encoded in base64) to be transcribed.
+      - language: The language code for transcription (default "en").
+      - segments: A list of dictionaries representing transcribed segments. Each dictionary should contain:
+            - "start_time": (float) the start time of the segment in seconds,
+            - "end_time": (float) the end time of the segment in seconds,
+            - "text": (str) the transcribed text.
+            - "gender": (str) the gender of the speaker.      
+      - job_status: Optional status information from the miner.
+      - time_elapsed: Time taken to process the request in seconds.
     """
+    job_id: Optional[str] = None
+    base64_audio: Optional[str] = None
+    audio_path: Optional[str] = None
+    language: Optional[str] = "en"
+    segments: Optional[List[dict]] = None    # Each dict: {"start_time": float, "end_time": float, "text": str, "gender": str}
+    job_status: Optional[str] = None
+    time_elapsed: Optional[float] = 0.0      # Changed from ClassVar to regular field
+    predicted_gender: Optional[str] = None    # Added for storing gender prediction
 
-    # Used by the validator
-    time_elapsed = 0
-
-    # Required request input, filled by sending dendrite caller. It is a base64 encoded string.
-    base64_image: str
-
-    # Optional request output, filled by recieving axon.
-    response: Optional[List[dict]] = None
-
-    def deserialize(self) -> List[dict]:
+    def deserialize(self) -> "CaptionSynapse":
         """
         Deserialize the miner response.
-
+        
+        This method can be extended to perform additional post-processing
+        on the segments if necessary. Here, it simply logs and returns self.
+        
         Returns:
-        - List[dict]: The deserialized response, which is a list of dictionaries containing the extracted data.
+            CaptionSynapse: The deserialized synapse instance.
         """
-        return self.response
+        bt.logging.info(f"Deserializing CaptionSynapse for job_id: {self.job_id}")
+        if self.segments is not None:
+            bt.logging.debug(f"Segments: {self.segments}")
+        return self
