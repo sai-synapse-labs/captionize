@@ -2,10 +2,10 @@
 # TODO:
 - [ ] Add a miner.md to the docs directory
 - [ ] Add a validator.md to the docs directory
-- [*] Code review and cleanup
+- [x] Code review and cleanup
 - [ ] to run and check multiple validators and miners
 
-- [ ] update the dataset to fetch more data after the first 100 rows
+- [x] update the dataset to fetch more data after the first 100 rows
 - [ ] Check for duplicates in the jobs
 - [ ] Move and Serve the synthetic data from the localDB or S3
 - [ ] Add ```api.py``` and expose the endpoints for a webapp
