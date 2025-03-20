@@ -2,7 +2,7 @@
 # TODO:
 - [ ] Add a miner.md to the docs directory
 - [ ] Add a validator.md to the docs directory
-- [*] Code review and cleanup
+- [x] Code review and cleanup
 - [ ] to run and check multiple validators and miners
 
 - [ ] update the dataset to fetch more data after the first 100 rows
