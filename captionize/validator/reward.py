@@ -356,12 +356,12 @@ def reward(self, labels: List[dict], response: CaptionSynapse) -> float:
     avg_spelling = sum(spelling_rewards) / max(1, len(spelling_rewards))
     
     # Combine transcription-related rewards
-    # Weights for different components
-    w_edit = 0.25  # Edit distance-based similarity
+    # Weights for different components - edit distance now includes the 5% from time reward
+    w_edit = 0.30  # Edit distance-based similarity (increased from 0.25 to 0.30)
     w_wer = 0.30   # Word Error Rate
-    w_critical = 0.20  # Critical words accuracy
+    w_critical = 0.20  # Critical words accuracye
     w_punct = 0.10  # Punctuation accuracy
-    w_spell = 0.15  # Spelling accuracy
+    w_spell = 0.10  # Spelling accuracy (reduced from 0.15 to 0.10)
     
     # Combined transcription reward
     transcription_reward = (
@@ -372,40 +372,19 @@ def reward(self, labels: List[dict], response: CaptionSynapse) -> float:
         w_spell * avg_spelling
     )
     
-    # Get timeout value from config or use default
-    try:
-        timeout = getattr(self.config.neuron, "request_timeout", 10.0)
-        if timeout is None or not isinstance(timeout, (int, float)):
-            timeout = 10.0  # Fallback default
-    except Exception as e:
-        bt.logging.warning(f"Error getting timeout from config: {e}. Using default.")
-        timeout = 10.0
-    
-    # Compute time reward (less important now)
-    try:
-        if response.time_elapsed is None:
-            time_reward = 0.0  # No time information available
-        else:
-            time_reward = max(1 - float(response.time_elapsed) / float(timeout), 0)
-    except Exception as e:
-        bt.logging.warning(f"Error calculating time reward: {e}. Using 0.")
-        time_reward = 0.0
-    
     # Compute gender reward using predicted_gender field
     gender_true = labels[0].get("gender", "").strip()
     gender_pred = getattr(response, "predicted_gender", None)
     gender_reward = get_gender_reward(gender_true, gender_pred)
     
-    # Weights for final reward calculation
-    alpha_transcription = 0.75  # Transcription is most important
-    alpha_gender = 0.20        # Gender prediction is second
-    alpha_time = 0.05          # Time is least important
+    # Weights for final reward calculation - removed time component
+    alpha_transcription = 0.80  # Transcription is most important (increased from 0.75 to 0.80)
+    alpha_gender = 0.20        # Gender prediction remains at 0.20
     
-    # Combine all rewards
+    # Combine all rewards - no time reward component
     total_reward = (
         alpha_transcription * transcription_reward +
-        alpha_gender * gender_reward +
-        alpha_time * time_reward
+        alpha_gender * gender_reward
     )
     
     # Log detailed reward components for debugging
@@ -416,7 +395,6 @@ def reward(self, labels: List[dict], response: CaptionSynapse) -> float:
     bt.logging.info(f"  Punctuation: {avg_punctuation:.3f}")
     bt.logging.info(f"  Spelling: {avg_spelling:.3f}")
     bt.logging.info(f"  Gender: {gender_reward:.3f}")
-    bt.logging.info(f"  Time: {time_reward:.3f}")
     bt.logging.info(f"  Total: {total_reward:.3f}")
     
     return total_reward
