@@ -35,6 +35,7 @@ from datetime import datetime
 import requests
 from dotenv import load_dotenv
 from pathlib import Path
+import hashlib
 
 # Load environment variables from .env file
 load_dotenv()
@@ -240,18 +241,85 @@ def process_examples(data: dict) -> list:
     
     return processed_jobs
 
+def remove_duplicates(jobs_list):
+    """
+    Remove duplicate jobs from the list based on audio content, transcript text, and job ID.
+    
+    Args:
+        jobs_list (list): List of job dictionaries
+        
+    Returns:
+        list: Deduplicated list of jobs
+    """
+    if not jobs_list:
+        return []
+    
+    bt.logging.info(f"Checking for duplicates in {len(jobs_list)} jobs")
+    
+    # Track seen items using different identifiers
+    seen_audio_hashes = set()
+    seen_transcripts = set()
+    seen_job_ids = set()
+    unique_jobs = []
+    
+    for job in jobs_list:
+        # Generate hash from audio content if available
+        audio_hash = None
+        if job.get("audio"):
+            audio_hash = hashlib.md5(job["audio"].encode()).hexdigest()
+        
+        # Get transcript text
+        transcript = job.get("normalized_text", "").strip().lower()
+        
+        # Get job ID
+        job_id = job.get("job_id")
+        
+        # Check if this job is a duplicate
+        is_duplicate = False
+        
+        # Check audio hash if available
+        if audio_hash and audio_hash in seen_audio_hashes:
+            bt.logging.debug(f"Duplicate audio content found for job {job_id}")
+            is_duplicate = True
+        
+        # Check transcript if not empty
+        if transcript and transcript in seen_transcripts:
+            bt.logging.debug(f"Duplicate transcript found for job {job_id}: '{transcript[:30]}...'")
+            is_duplicate = True
+            
+        # Check job ID
+        if job_id in seen_job_ids:
+            bt.logging.debug(f"Duplicate job ID found: {job_id}")
+            is_duplicate = True
+            
+        # If not a duplicate, add to unique jobs and update tracking sets
+        if not is_duplicate:
+            unique_jobs.append(job)
+            if audio_hash:
+                seen_audio_hashes.add(audio_hash)
+            if transcript:
+                seen_transcripts.add(transcript)
+            if job_id:
+                seen_job_ids.add(job_id)
+    
+    duplicates_count = len(jobs_list) - len(unique_jobs)
+    bt.logging.info(f"Removed {duplicates_count} duplicate jobs. {len(unique_jobs)} unique jobs remaining.")
+    
+    return unique_jobs
+
 def generate_synthetic_jobs(use_cache=True, length=100) -> list:
     """
     Generate synthetic caption jobs:
       - Loads VoxPopuli dataset (English, train split) via the API.
       - Processes all available examples in the fetched data into job dictionaries.
+      - Removes duplicate jobs to ensure unique tasks.
     
     Args:
         use_cache: Whether to use cached data if available
         length: Number of examples to fetch in each batch
     
     Returns:
-        list: A list of job dictionaries.
+        list: A list of unique job dictionaries.
     """
     bt.logging.info("Loading VoxPopuli dataset...")
     # Check for existing VoxPopuli data files
@@ -275,7 +343,8 @@ def generate_synthetic_jobs(use_cache=True, length=100) -> list:
             # Process the loaded data
             jobs = process_examples(data)
             if jobs:  # If jobs were successfully processed
-                return jobs
+                # Remove duplicates before returning
+                return remove_duplicates(jobs)
             # If no jobs processed, fall through to loading fresh data
             bt.logging.warning("No jobs processed from cache, loading fresh data")
         except Exception as e:
@@ -286,6 +355,9 @@ def generate_synthetic_jobs(use_cache=True, length=100) -> list:
     bt.logging.info("Loading fresh VoxPopuli data...")
     data = load_voxpopuli_data(length=length)
     jobs = process_examples(data)
+    
+    # Remove duplicates from the processed jobs
+    jobs = remove_duplicates(jobs)
     
     # Fallback to a hardcoded sample if no jobs could be processed
     if not jobs:
