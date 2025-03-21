@@ -3,7 +3,7 @@ torch==2.5.1
 pandas
 scipy
 pydub
-jiwer
+jiwer>=2.3.0
 numpy==2.0.2
 loguru==0.7.3
 fastapi
@@ -25,3 +25,4 @@ speechbrain==1.0.2
 editdistance
 librosa==0.11.0
 soundfile==0.13.1
+editdistance

@@ -2,14 +2,14 @@
 # Copyright © 2023 Yuma Rao
 
 # Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated
-# documentation files (the “Software”), to deal in the Software without restriction, including without limitation
+# documentation files (the "Software"), to deal in the Software without restriction, including without limitation
 # the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software,
 # and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
 
 # The above copyright notice and this permission notice shall be included in all copies or substantial portions of
 # the Software.
 
-# THE SOFTWARE IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO
 # THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
 # THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
 # OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
@@ -17,9 +17,12 @@
 
 import torch
 import bittensor as bt
-from typing import List
+from typing import List, Dict, Any
 import editdistance
+import re
+import string
 from scipy.optimize import linear_sum_assignment
+import jiwer
 
 from captionize.protocol import CaptionSynapse  # our custom synapse for captioning
 
@@ -39,87 +42,252 @@ def get_text_reward(text1: str, text2: str = None) -> float:
         return 0.0
     return 1 - editdistance.eval(text1, text2) / max(len(text1), len(text2))
 
-def get_gender_reward(gender_true: str, gender_pred: str = None) -> float:
+def calculate_wer(reference: str, hypothesis: str) -> float:
     """
-    Compute a reward based on the comparison of speaker gender.
-    
-    Returns 1.0 if the genders match (case-insensitive), otherwise 0.0.
+    Calculate Word Error Rate (WER) between reference and hypothesis.
     
     Args:
-      gender_true (str): Ground truth speaker gender.
-      gender_pred (str, optional): Predicted speaker gender.
-      
+        reference (str): The ground truth text
+        hypothesis (str): The predicted text
+        
     Returns:
-      float: 1.0 if genders match, 0.0 otherwise.
+        float: WER score (lower is better)
     """
-    if not gender_pred:
-        return 0.0
-    return 1.0 if gender_true.strip().lower() == gender_pred.strip().lower() else 0.0
+    # Use jiwer to calculate WER
+    try:
+        return jiwer.wer(reference, hypothesis)
+    except Exception as e:
+        bt.logging.warning(f"Error calculating WER: {e}")
+        return 1.0  # Return worst score on error
 
-def section_reward(label: dict, pred: dict, alpha_t: float = 1.0, verbose: bool = False) -> dict:
+def get_wer_reward(reference: str, hypothesis: str) -> float:
     """
-    Compute a reward for a single caption segment based on text quality.
+    Calculate a reward based on Word Error Rate (WER).
+    A reward of 1.0 means a perfect match (WER = 0).
     
     Args:
-      label (dict): Ground truth segment with "text".
-      pred (dict): Predicted segment with "text".
-      alpha_t (float): Weight factor for text reward.
-      verbose (bool): If True, logs additional details.
-      
+        reference (str): The ground truth text
+        hypothesis (str): The predicted text
+        
     Returns:
-      dict: Contains the text reward and a total reward (scaled by alpha_t).
+        float: WER-based reward between 0 and 1
     """
-    text_reward = get_text_reward(label['text'], pred.get('text'))
+    if not hypothesis or not reference:
+        return 0.0
     
-    # Ensure alpha_t is a valid number
-    if alpha_t is None:
-        bt.logging.warning("alpha_t was None in section_reward, using default value 1.0")
-        alpha_t = 1.0
+    wer = calculate_wer(reference, hypothesis)
+    # Convert WER to reward (1 - WER, capped at 0)
+    return max(0.0, 1.0 - wer)
+
+def check_critical_words(reference: str, hypothesis: str) -> float:
+    """
+    Check if critical words in the reference are present in the hypothesis.
+    Critical words are typically proper nouns, acronyms, or words in ALL CAPS.
     
-    total = alpha_t * text_reward
-    if verbose:
-        bt.logging.info(', '.join([f"text_reward: {text_reward:.3f}", f"total: {total:.3f}"]))
-    return {"text": text_reward, "total": total}
+    Args:
+        reference (str): The ground truth text
+        hypothesis (str): The predicted text
+        
+    Returns:
+        float: Reward between 0 and 1 based on critical word accuracy
+    """
+    if not hypothesis or not reference:
+        return 0.0
+    
+    # Find words in ALL CAPS or words in parentheses in the reference
+    critical_pattern = r'\b[A-Z]{2,}\b|\(\w+\)'
+    critical_words = re.findall(critical_pattern, reference)
+    
+    if not critical_words:
+        return 1.0  # No critical words to check
+    
+    # Count how many critical words are in the hypothesis
+    correct_count = 0
+    for word in critical_words:
+        if word in hypothesis:
+            correct_count += 1
+    
+    return correct_count / len(critical_words)
+
+def check_punctuation(reference: str, hypothesis: str) -> float:
+    """
+    Evaluate punctuation accuracy in the hypothesis compared to reference.
+    
+    Args:
+        reference (str): The ground truth text
+        hypothesis (str): The predicted text
+        
+    Returns:
+        float: Reward between 0 and 1 based on punctuation accuracy
+    """
+    if not hypothesis or not reference:
+        return 0.0
+    
+    # Extract punctuation from both texts
+    ref_punct = [c for c in reference if c in string.punctuation]
+    hyp_punct = [c for c in hypothesis if c in string.punctuation]
+    
+    # If no punctuation in reference, return perfect score
+    if not ref_punct:
+        return 1.0
+    
+    # Calculate punctuation precision and recall
+    common_punct = set(ref_punct).intersection(set(hyp_punct))
+    precision = len(common_punct) / max(1, len(hyp_punct))
+    recall = len(common_punct) / len(ref_punct)
+    
+    # F1 score for punctuation
+    if precision + recall == 0:
+        return 0.0
+    return 2 * precision * recall / (precision + recall)
+
+def check_spelling(reference: str, hypothesis: str) -> float:
+    """
+    Evaluate spelling accuracy by comparing words in hypothesis to reference.
+    
+    Args:
+        reference (str): The ground truth text
+        hypothesis (str): The predicted text
+        
+    Returns:
+        float: Reward between 0 and 1 based on spelling accuracy
+    """
+    if not hypothesis or not reference:
+        return 0.0
+    
+    # Tokenize into words (remove punctuation first)
+    ref_text = ''.join([c if c not in string.punctuation else ' ' for c in reference.lower()])
+    hyp_text = ''.join([c if c not in string.punctuation else ' ' for c in hypothesis.lower()])
+    
+    ref_words = [w for w in ref_text.split() if w]
+    hyp_words = [w for w in hyp_text.split() if w]
+    
+    if not ref_words:
+        return 1.0
+    
+    # For each word in reference, find closest match in hypothesis
+    total_similarity = 0.0
+    for ref_word in ref_words:
+        best_similarity = 0.0
+        for hyp_word in hyp_words:
+            # Calculate word similarity using character-level edit distance
+            similarity = 1 - editdistance.eval(ref_word, hyp_word) / max(len(ref_word), len(hyp_word))
+            best_similarity = max(best_similarity, similarity)
+        total_similarity += best_similarity
+    
+    return total_similarity / len(ref_words)
+
+def get_gender_reward(true_gender: str, pred_gender: str) -> float:
+    """
+    Calculate gender prediction reward.
+    
+    Args:
+        true_gender (str): The ground truth gender
+        pred_gender (str): The predicted gender
+        
+    Returns:
+        float: 1.0 if correct, 0.0 if incorrect
+    """
+    if not pred_gender or not true_gender:
+        return 0.0
+    
+    # Normalize gender strings for comparison
+    true_norm = true_gender.strip().lower()
+    pred_norm = pred_gender.strip().lower()
+    
+    # Check for exact match
+    if true_norm == pred_norm:
+        return 1.0
+    
+    # Check for partial matches (male/female vs man/woman)
+    if (true_norm in ['male', 'man'] and pred_norm in ['male', 'man']) or \
+       (true_norm in ['female', 'woman'] and pred_norm in ['female', 'woman']):
+        return 1.0
+    
+    return 0.0
 
 def sort_predictions(labels: List[dict], predictions: List[dict]) -> List[dict]:
     """
-    Align the predicted segments with the ground truth segments using the Hungarian algorithm.
+    Align predictions with ground truth segments using the Hungarian algorithm.
     
     Args:
-      labels (List[dict]): List of ground truth segments.
-      predictions (List[dict]): List of predicted segments.
-      
+        labels (List[dict]): Ground truth segments
+        predictions (List[dict]): Predicted segments
+        
     Returns:
-      List[dict]: Sorted predictions aligned with labels.
+        List[dict]: Aligned predictions
     """
-    # Pad predictions if needed
-    predictions += [{}] * (len(labels) - len(predictions))
+    if not predictions:
+        return []
     
-    # Create reward matrix
-    r = torch.zeros((len(labels), len(predictions)))
+    if not labels:
+        return predictions
+    
+    # If we have only one label and one prediction, no need for alignment
+    if len(labels) == 1 and len(predictions) == 1:
+        return predictions
+    
+    # Create cost matrix for Hungarian algorithm
+    cost_matrix = []
+    for label in labels:
+        row = []
+        label_text = label.get("text", "")
+        for pred in predictions:
+            pred_text = pred.get("text", "")
+            # Cost is 1 - similarity (higher similarity = lower cost)
+            similarity = get_text_reward(label_text, pred_text)
+            row.append(1.0 - similarity)
+        cost_matrix.append(row)
+    
+    # Use Hungarian algorithm to find optimal assignment
+    row_ind, col_ind = linear_sum_assignment(cost_matrix)
+    
+    # Create aligned predictions
+    aligned_preds = []
     for i in range(len(labels)):
-        for j in range(len(predictions)):
-            r[i, j] = section_reward(labels[i], predictions[j])["total"]
+        if i < len(row_ind) and col_ind[i] < len(predictions):
+            aligned_preds.append(predictions[col_ind[i]])
+        else:
+            # If no prediction is aligned with this label, add empty prediction
+            aligned_preds.append({"text": ""})
     
-    # Convert to NumPy for scipy, then back to native Python types
-    row_ind, col_ind = linear_sum_assignment(r.detach().cpu().numpy(), maximize=True)
-    col_ind = col_ind.tolist()  # Convert NumPy array to Python list
+    return aligned_preds
+
+def get_rewards(self, labels: List[dict], responses: List[CaptionSynapse]) -> torch.FloatTensor:
+    """
+    Calculate rewards for multiple miner responses.
     
-    # Sort the predictions based on the assignment
-    sorted_preds = [predictions[i] for i in col_ind]
-    return sorted_preds
+    Args:
+        labels (List[dict]): Ground truth segments
+        responses (List[CaptionSynapse]): Miner responses
+        
+    Returns:
+        torch.FloatTensor: Tensor of rewards
+    """
+    rewards = []
+    
+    for response in responses:
+        # Deserialize the response if needed
+        if hasattr(response, 'deserialize'):
+            response = response.deserialize()
+        
+        # Calculate reward for this response
+        reward_value = reward(self, labels, response)
+        rewards.append(reward_value)
+    
+    # Convert to tensor
+    rewards_tensor = torch.tensor(rewards, dtype=torch.float32)
+    return rewards_tensor
 
 def reward(self, labels: List[dict], response: CaptionSynapse) -> float:
     """
     Compute the overall reward for a miner's response to a caption task.
-    The reward combines text accuracy, response time, and gender accuracy.
+    The reward combines text accuracy, WER, critical word accuracy,
+    punctuation, spelling, and gender accuracy.
     
     Args:
       labels (List[dict]): Ground truth segments, each with "text" and "gender" fields.
-      response (CaptionSynapse): The miner's response, expected to include:
-           - segments: a list of predicted CaptionSegment objects (each with "text")
-           - time_elapsed: time taken by the miner to produce the response
-           - predicted_gender (optional): predicted speaker gender.
+      response (CaptionSynapse): The miner's response.
     
     Returns:
       float: The final combined reward.
@@ -130,8 +298,6 @@ def reward(self, labels: List[dict], response: CaptionSynapse) -> float:
         return 0.0
 
     # Check segment type and convert if needed
-    # If segments are already dictionaries, use them directly
-    # Otherwise, convert them to dictionaries using .dict() method
     segment_dicts = []
     for seg in predictions:
         if isinstance(seg, dict):
@@ -150,56 +316,66 @@ def reward(self, labels: List[dict], response: CaptionSynapse) -> float:
     # Align predictions with ground truth segments
     aligned_predictions = sort_predictions(labels, segment_dicts)
     
-    # Retrieve weight factors from configuration with defaults
-    try:
-        alpha_text = float(getattr(self.config.neuron, 'alpha_text', 1.0))
-        if alpha_text is None:
-            alpha_text = 1.0
-    except (ValueError, TypeError):
-        bt.logging.warning("Invalid alpha_text in config, using default 1.0")
-        alpha_text = 1.0
+    # Calculate rewards for each aspect of the transcription
+    prediction_rewards = []
+    wer_rewards = []
+    critical_word_rewards = []
+    punctuation_rewards = []
+    spelling_rewards = []
     
-    try:
-        alpha_prediction = float(getattr(self.config.neuron, 'alpha_prediction', 0.7))
-        if alpha_prediction is None or alpha_prediction <= 0:
-            alpha_prediction = 0.7
-    except (ValueError, TypeError):
-        bt.logging.warning("Invalid alpha_prediction in config, using default 0.7")
-        alpha_prediction = 0.7
+    for i, label in enumerate(labels):
+        if i < len(aligned_predictions):
+            pred = aligned_predictions[i]
+            
+            # Get text from label and prediction
+            label_text = label.get("text", "").strip()
+            pred_text = pred.get("text", "").strip()
+            
+            # Skip empty predictions or labels
+            if not label_text or not pred_text:
+                continue
+            
+            # Calculate various reward components
+            text_reward = get_text_reward(label_text, pred_text)
+            wer_reward = get_wer_reward(label_text, pred_text)
+            critical_reward = check_critical_words(label_text, pred_text)
+            punct_reward = check_punctuation(label_text, pred_text)
+            spell_reward = check_spelling(label_text, pred_text)
+            
+            prediction_rewards.append(text_reward)
+            wer_rewards.append(wer_reward)
+            critical_word_rewards.append(critical_reward)
+            punctuation_rewards.append(punct_reward)
+            spelling_rewards.append(spell_reward)
     
-    try:
-        alpha_time = float(getattr(self.config.neuron, 'alpha_time', 0.2))
-        if alpha_time is None or alpha_time < 0:
-            alpha_time = 0.2
-    except (ValueError, TypeError):
-        bt.logging.warning("Invalid alpha_time in config, using default 0.2")
-        alpha_time = 0.2
+    # Get average rewards for each component
+    avg_prediction = sum(prediction_rewards) / max(1, len(prediction_rewards))
+    avg_wer = sum(wer_rewards) / max(1, len(wer_rewards))
+    avg_critical = sum(critical_word_rewards) / max(1, len(critical_word_rewards))
+    avg_punctuation = sum(punctuation_rewards) / max(1, len(punctuation_rewards))
+    avg_spelling = sum(spelling_rewards) / max(1, len(spelling_rewards))
     
-    try:
-        alpha_gender = float(getattr(self.config.neuron, 'alpha_gender', 0.1))
-        if alpha_gender is None or alpha_gender < 0:
-            alpha_gender = 0.1
-    except (ValueError, TypeError):
-        bt.logging.warning("Invalid alpha_gender in config, using default 0.1")
-        alpha_gender = 0.1
+    # Combine transcription-related rewards
+    # Weights for different components
+    w_edit = 0.25  # Edit distance-based similarity
+    w_wer = 0.30   # Word Error Rate
+    w_critical = 0.20  # Critical words accuracy
+    w_punct = 0.10  # Punctuation accuracy
+    w_spell = 0.15  # Spelling accuracy
     
-    try:
-        timeout = float(getattr(self.config.neuron, 'timeout', 10.0))
-        if timeout is None or timeout <= 0:
-            timeout = 10.0
-    except (ValueError, TypeError):
-        bt.logging.warning("Invalid timeout in config, using default 10.0")
-        timeout = 10.0
-
-    # Compute text reward from each segment
-    section_rewards = [
-        section_reward(label, pred, alpha_t=alpha_text, verbose=True)
-        for label, pred in zip(labels, aligned_predictions)
-    ]
-    text_reward_values = [r["total"] for r in section_rewards]
-    prediction_reward = torch.mean(torch.FloatTensor(text_reward_values))
+    # Combined transcription reward
+    transcription_reward = (
+        w_edit * avg_prediction +
+        w_wer * avg_wer +
+        w_critical * avg_critical +
+        w_punct * avg_punctuation +
+        w_spell * avg_spelling
+    )
     
-    # Compute time reward
+    # Get timeout value from config or use default
+    timeout = getattr(self.config.neuron, "request_timeout", 10.0)
+    
+    # Compute time reward (less important now)
     time_reward = max(1 - response.time_elapsed / timeout, 0)
     
     # Compute gender reward using predicted_gender field
@@ -207,45 +383,27 @@ def reward(self, labels: List[dict], response: CaptionSynapse) -> float:
     gender_pred = getattr(response, "predicted_gender", None)
     gender_reward = get_gender_reward(gender_true, gender_pred)
     
-    # Combine rewards using weighted average
-    # weight_sum = alpha_prediction + alpha_time + alpha_gender
-    weight_sum = alpha_prediction + alpha_gender
-    if weight_sum <= 0:
-        bt.logging.warning("Sum of weights is zero or negative, using equal weights")
-        alpha_prediction = alpha_gender = 1.0
-        weight_sum = 2.0
+    # Weights for final reward calculation
+    alpha_transcription = 0.75  # Transcription is most important
+    alpha_gender = 0.20        # Gender prediction is second
+    alpha_time = 0.05          # Time is least important
     
-    total_reward = (alpha_prediction * prediction_reward + alpha_gender * gender_reward) / weight_sum
+    # Combine all rewards
+    total_reward = (
+        alpha_transcription * transcription_reward +
+        alpha_gender * gender_reward +
+        alpha_time * time_reward
+    )
     
-    bt.logging.info(f"Prediction Reward: {prediction_reward:.3f}, Gender Reward: {gender_reward:.3f}, Total Reward: {total_reward:.3f}")
+    # Log detailed reward components for debugging
+    bt.logging.info(f"Reward components:")
+    bt.logging.info(f"  Edit distance: {avg_prediction:.3f}")
+    bt.logging.info(f"  WER: {avg_wer:.3f}")
+    bt.logging.info(f"  Critical words: {avg_critical:.3f}")
+    bt.logging.info(f"  Punctuation: {avg_punctuation:.3f}")
+    bt.logging.info(f"  Spelling: {avg_spelling:.3f}")
+    bt.logging.info(f"  Gender: {gender_reward:.3f}")
+    bt.logging.info(f"  Time: {time_reward:.3f}")
+    bt.logging.info(f"  Total: {total_reward:.3f}")
+    
     return total_reward
-
-def get_rewards(self, labels: List[dict], responses: List[CaptionSynapse]) -> torch.FloatTensor:
-    """
-    Compute rewards for a batch of miner responses.
-    
-    Args:
-      labels (List[dict]): The ground truth segments.
-      responses (List[CaptionSynapse]): List of miner responses.
-    
-    Returns:
-      torch.FloatTensor: Tensor of computed rewards.
-      
-    Note:
-      If responses is None, returns a zero tensor of shape (1,).
-      This handles the case where dendrite.query() returns None.
-    """
-    # Handle empty responses or None
-    if responses is None or len(responses) == 0:
-        return torch.zeros(1).to(self.device)
-    
-    # Calculate rewards for each response
-    rewards = []
-    for response in responses:
-        if response is None:
-            rewards.append(0.0)  # Add zero reward for None response
-        else:
-            rewards.append(reward(self, labels, response))
-    
-    # Convert to PyTorch tensor and return
-    return torch.FloatTensor(rewards).to(self.device)
