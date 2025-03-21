@@ -373,10 +373,23 @@ def reward(self, labels: List[dict], response: CaptionSynapse) -> float:
     )
     
     # Get timeout value from config or use default
-    timeout = getattr(self.config.neuron, "request_timeout", 10.0)
+    try:
+        timeout = getattr(self.config.neuron, "request_timeout", 10.0)
+        if timeout is None or not isinstance(timeout, (int, float)):
+            timeout = 10.0  # Fallback default
+    except Exception as e:
+        bt.logging.warning(f"Error getting timeout from config: {e}. Using default.")
+        timeout = 10.0
     
     # Compute time reward (less important now)
-    time_reward = max(1 - response.time_elapsed / timeout, 0)
+    try:
+        if response.time_elapsed is None:
+            time_reward = 0.0  # No time information available
+        else:
+            time_reward = max(1 - float(response.time_elapsed) / float(timeout), 0)
+    except Exception as e:
+        bt.logging.warning(f"Error calculating time reward: {e}. Using 0.")
+        time_reward = 0.0
     
     # Compute gender reward using predicted_gender field
     gender_true = labels[0].get("gender", "").strip()
