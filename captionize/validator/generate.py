@@ -307,7 +307,7 @@ def remove_duplicates(jobs_list):
     
     return unique_jobs
 
-def generate_synthetic_jobs(use_cache=True, length=100) -> list:
+def generate_synthetic_job(use_cache=True, length=100) -> list:
     """
     Generate synthetic caption jobs:
       - Loads VoxPopuli dataset (English, train split) via the API.
@@ -381,7 +381,7 @@ def generate_synthetic_jobs(use_cache=True, length=100) -> list:
 if __name__ == "__main__":
     try:
         # Set use_cache=False to always get fresh data with new offset
-        jobs = generate_synthetic_jobs(use_cache=False, length=100)
+        jobs = generate_synthetic_job(use_cache=False, length=100)
         bt.logging.info(f"Generated {len(jobs)} Synthetic Jobs")
         bt.logging.debug(json.dumps(jobs[:2], indent=2))  # Show just first 2 for brevity
     except Exception as e:

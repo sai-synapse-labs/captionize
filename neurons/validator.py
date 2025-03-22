@@ -22,7 +22,7 @@ import bittensor as bt
 import random
 import captionize  # our project package
 from captionize.base.validator import BaseValidatorNeuron
-from captionize.validator.generate import generate_synthetic_jobs
+from captionize.validator.generate import generate_synthetic_job
 from captionize.validator.reward import get_rewards
 from captionize.utils.uids import get_random_uids
 import torch
