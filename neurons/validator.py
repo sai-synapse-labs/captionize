@@ -118,6 +118,8 @@ class Validator(BaseValidatorNeuron):
         # Update miner scores using the computed rewards (update_scores must be implemented in BaseValidatorNeuron)
         self.update_scores(rewards, miner_uids)
         
+        bt.logging.info(f"Querying {len(miner_uids)} miners with job_id: {job.get('job_id')}")
+        
         return synapse
 
     def set_weights(self):

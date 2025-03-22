@@ -85,6 +85,7 @@ class Miner(BaseMinerNeuron):
         """
         Process the incoming CaptionSynapse request with GPU acceleration and fallbacks.
         """
+        bt.logging.info(f"Received request for job_id: {synapse.job_id}")
         start_time = time.time()
         if synapse.job_status not in ["done"]:
             # Get or create audio file
