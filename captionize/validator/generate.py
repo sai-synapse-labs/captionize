@@ -307,7 +307,7 @@ def remove_duplicates(jobs_list):
     
     return unique_jobs
 
-def generate_synthetic_jobss(use_cache=True, length=100) -> list:
+def generate_synthetic_jobs(use_cache=True, length=100) -> list:
     """
     Generate synthetic caption jobs:
       - Loads VoxPopuli dataset (English, train split) via the API.
