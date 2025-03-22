@@ -81,6 +81,10 @@ class Miner(BaseMinerNeuron):
             bt.logging.debug(traceback.format_exc())
             raise
 
+        
+        self.metagraph.sync(subtensor=self.subtensor)
+        bt.logging.info(f"Synced metagraph with {len(self.metagraph.hotkeys)} hotkeys")
+
     async def forward(self, synapse: CaptionSynapse) -> CaptionSynapse:
         """
         Process the incoming CaptionSynapse request with GPU acceleration and fallbacks.
