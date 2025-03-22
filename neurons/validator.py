@@ -66,7 +66,7 @@ class Validator(BaseValidatorNeuron):
         bt.logging.debug(f"Miner UIDs: {miner_uids}")
         
         # Generate a synthetic caption job from VoxPopuli
-        jobs_data = generate_synthetic_jobs()
+        jobs_data = generate_synthetic_job()
         bt.logging.debug(f"Generated job: {jobs_data}")
         
         # Select one job randomly.
