@@ -74,8 +74,12 @@ class Validator(BaseValidatorNeuron):
         if self.job_queue.should_fetch_new_jobs():
             bt.logging.info("Fetching new jobs to fill the queue")
             jobs_data = generate_synthetic_jobs()
-            self.job_queue.add_jobs(jobs_data)
-            bt.logging.info(f"Starting new batch {self.job_queue.current_batch_id}")
+            
+            # Make sure we have jobs to add
+            if jobs_data and len(jobs_data) > 0:
+                self.job_queue.add_jobs(jobs_data)
+            else:
+                bt.logging.error("Failed to generate new jobs")
         
         # Get the next job from the queue
         job = self.job_queue.get_next_job()
@@ -117,7 +121,13 @@ class Validator(BaseValidatorNeuron):
         if responses is None:
             responses = []
         
-        bt.logging.info(f"Received responses: {responses}")
+        bt.logging.info(f"Received {len(responses)} responses for job {job.get('job_id')}")
+        
+        # Track which miners completed this job
+        for i, response in enumerate(responses):
+            if hasattr(response, 'job_status') and response.job_status == "done":
+                miner_hotkey = self.metagraph.hotkeys[miner_uids[i]]
+                self.job_queue.mark_job_completed_by_miner(job.get("job_id"), miner_hotkey)
         
         # Compute rewards for the miner responses
         rewards = get_rewards(self, labels=labels, responses=responses)

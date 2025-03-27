@@ -52,6 +52,8 @@ class JobQueue:
         self.completed_job_ids = set()
         self.current_batch_id = 0  # Track the current batch being processed
         self.current_batch_completed = 0  # Count of completed jobs in current batch
+        self.current_batch_jobs = []  # Track job IDs in the current batch
+        self.miner_completed_jobs = {}  # Track which miners have completed which jobs
         
         # Load existing queue if available
         self._load_queue()
@@ -66,14 +68,18 @@ class JobQueue:
                     self.completed_job_ids = set(data.get('completed_job_ids', []))
                     self.current_batch_id = data.get('current_batch_id', 0)
                     self.current_batch_completed = data.get('current_batch_completed', 0)
+                    self.current_batch_jobs = data.get('current_batch_jobs', [])
+                    self.miner_completed_jobs = data.get('miner_completed_jobs', {})
                 bt.logging.info(f"Loaded job queue with {len(self.pending_jobs)} pending jobs and {len(self.completed_job_ids)} completed jobs")
-                bt.logging.info(f"Current batch: {self.current_batch_id}, completed in batch: {self.current_batch_completed}")
+                bt.logging.info(f"Current batch: {self.current_batch_id}, completed in batch: {self.current_batch_completed}/{len(self.current_batch_jobs)}")
             except Exception as e:
                 bt.logging.warning(f"Error loading job queue: {e}. Starting with empty queue.")
                 self.pending_jobs = []
                 self.completed_job_ids = set()
                 self.current_batch_id = 0
                 self.current_batch_completed = 0
+                self.current_batch_jobs = []
+                self.miner_completed_jobs = {}
         else:
             bt.logging.info("No existing job queue found. Starting with empty queue.")
     
@@ -86,6 +92,8 @@ class JobQueue:
                     'completed_job_ids': list(self.completed_job_ids),
                     'current_batch_id': self.current_batch_id,
                     'current_batch_completed': self.current_batch_completed,
+                    'current_batch_jobs': list(self.current_batch_jobs),
+                    'miner_completed_jobs': self.miner_completed_jobs,
                     'updated_at': datetime.now().isoformat()
                 }, f, indent=2)
             bt.logging.debug("Job queue saved to disk")
@@ -94,22 +102,26 @@ class JobQueue:
     
     def add_jobs(self, jobs: List[Dict[str, Any]]):
         """
-        Add new jobs to the queue if needed.
+        Add new jobs to the queue.
         
         Args:
             jobs: List of job dictionaries to add
         """
-        # Only add jobs if we need more
-        if len(self.pending_jobs) < self.queue_size:
-            # Filter out jobs we've already completed
-            new_jobs = [job for job in jobs if job.get('job_id') not in self.completed_job_ids]
-            
-            # Add new jobs up to the queue size
-            jobs_needed = self.queue_size - len(self.pending_jobs)
-            self.pending_jobs.extend(new_jobs[:jobs_needed])
-            
-            bt.logging.info(f"Added {min(len(new_jobs), jobs_needed)} new jobs to the queue")
-            self._save_queue()
+        # Filter out jobs that are already completed
+        new_jobs = [job for job in jobs if job.get('job_id') not in self.completed_job_ids]
+        
+        # Add new jobs to the pending queue
+        self.pending_jobs.extend(new_jobs)
+        
+        # Track jobs in the current batch
+        self.current_batch_jobs.extend([job.get('job_id') for job in new_jobs])
+        
+        bt.logging.info(f"Added {len(new_jobs)} new jobs to the queue")
+        self._save_queue()
+        
+        # If we just added jobs to an empty queue, reset the batch counter
+        if len(self.pending_jobs) > 0 and self.current_batch_completed == 0:
+            bt.logging.info(f"Starting new batch {self.current_batch_id} with {len(self.pending_jobs)} jobs")
     
     def get_next_job(self) -> Optional[Dict[str, Any]]:
         """
@@ -124,6 +136,21 @@ class JobQueue:
         # Get the first job in the queue (FIFO)
         return self.pending_jobs[0]
     
+    def mark_job_completed_by_miner(self, job_id: str, miner_hotkey: str):
+        """
+        Track which miner has completed a specific job.
+        
+        Args:
+            job_id: The ID of the completed job
+            miner_hotkey: The hotkey of the miner that completed the job
+        """
+        if miner_hotkey not in self.miner_completed_jobs:
+            self.miner_completed_jobs[miner_hotkey] = set()
+        
+        self.miner_completed_jobs[miner_hotkey].add(job_id)
+        bt.logging.debug(f"Miner {miner_hotkey} completed job {job_id}")
+        self._save_queue()
+    
     def mark_job_completed(self, job_id: str):
         """
         Mark a job as completed and remove it from the pending queue.
@@ -137,8 +164,9 @@ class JobQueue:
         # Remove from pending queue
         self.pending_jobs = [job for job in self.pending_jobs if job.get('job_id') != job_id]
         
-        # Increment the count of completed jobs in the current batch
-        self.current_batch_completed += 1
+        # Increment the count of completed jobs in the current batch if this job is part of the current batch
+        if job_id in self.current_batch_jobs:
+            self.current_batch_completed += 1
         
         # Check if we've completed all jobs in the current batch
         if self.current_batch_completed >= self.queue_size:
@@ -146,6 +174,9 @@ class JobQueue:
             # Move to the next batch
             self.current_batch_id += 1
             self.current_batch_completed = 0
+            self.current_batch_jobs = []
+            # Reset miner completion tracking for the new batch
+            self.miner_completed_jobs = {}
         
         bt.logging.info(f"Marked job {job_id} as completed. {len(self.pending_jobs)} jobs remaining in queue.")
         bt.logging.info(f"Completed {self.current_batch_completed}/{self.queue_size} jobs in batch {self.current_batch_id}")
@@ -178,12 +209,19 @@ class JobQueue:
         Returns:
             Dictionary with queue statistics
         """
+        # Count how many miners have completed jobs
+        miners_with_completions = len(self.miner_completed_jobs)
+        total_miner_completions = sum(len(jobs) for jobs in self.miner_completed_jobs.values())
+        
         return {
             'pending_jobs_count': len(self.pending_jobs),
             'completed_jobs_count': len(self.completed_job_ids),
             'queue_capacity': self.queue_size,
             'current_batch_id': self.current_batch_id,
             'current_batch_completed': self.current_batch_completed,
+            'current_batch_jobs_count': len(self.current_batch_jobs),
             'batch_progress': f"{self.current_batch_completed}/{self.queue_size} jobs completed in batch {self.current_batch_id}",
+            'miners_with_completions': miners_with_completions,
+            'total_miner_completions': total_miner_completions,
             'can_fetch_new_jobs': self.should_fetch_new_jobs()
         } 
