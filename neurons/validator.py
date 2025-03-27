@@ -136,6 +136,22 @@ class Validator(BaseValidatorNeuron):
         bt.logging.info(f"Completed {len(self.job_queue.completed_job_ids)}/100 jobs before fetching new batch")
         
         return synapse
+    
+    def save_state(self):
+        """
+        Override the base validator's save_state method to save our custom state.
+        """
+        bt.logging.info("Saving validator state.")
+
+        # Save the state of the validator to file.
+        torch.save(
+            {
+                "step": self.step,
+                "scores": self.scores,
+                "hotkeys": self.hotkeys,
+            },
+            self.config.neuron.full_path + "/state.pt",
+        )
 
    
     def set_weights(self):
