@@ -50,6 +50,8 @@ class JobQueue:
         # Job tracking
         self.pending_jobs = []
         self.completed_job_ids = set()
+        self.current_batch_id = 0  # Track the current batch being processed
+        self.current_batch_completed = 0  # Count of completed jobs in current batch
         
         # Load existing queue if available
         self._load_queue()
@@ -62,11 +64,16 @@ class JobQueue:
                     data = json.load(f)
                     self.pending_jobs = data.get('pending_jobs', [])
                     self.completed_job_ids = set(data.get('completed_job_ids', []))
+                    self.current_batch_id = data.get('current_batch_id', 0)
+                    self.current_batch_completed = data.get('current_batch_completed', 0)
                 bt.logging.info(f"Loaded job queue with {len(self.pending_jobs)} pending jobs and {len(self.completed_job_ids)} completed jobs")
+                bt.logging.info(f"Current batch: {self.current_batch_id}, completed in batch: {self.current_batch_completed}")
             except Exception as e:
                 bt.logging.warning(f"Error loading job queue: {e}. Starting with empty queue.")
                 self.pending_jobs = []
                 self.completed_job_ids = set()
+                self.current_batch_id = 0
+                self.current_batch_completed = 0
         else:
             bt.logging.info("No existing job queue found. Starting with empty queue.")
     
@@ -77,6 +84,8 @@ class JobQueue:
                 json.dump({
                     'pending_jobs': self.pending_jobs,
                     'completed_job_ids': list(self.completed_job_ids),
+                    'current_batch_id': self.current_batch_id,
+                    'current_batch_completed': self.current_batch_completed,
                     'updated_at': datetime.now().isoformat()
                 }, f, indent=2)
             bt.logging.debug("Job queue saved to disk")
@@ -128,7 +137,18 @@ class JobQueue:
         # Remove from pending queue
         self.pending_jobs = [job for job in self.pending_jobs if job.get('job_id') != job_id]
         
+        # Increment the count of completed jobs in the current batch
+        self.current_batch_completed += 1
+        
+        # Check if we've completed all jobs in the current batch
+        if self.current_batch_completed >= self.queue_size:
+            bt.logging.info(f"Completed batch {self.current_batch_id} with {self.current_batch_completed} jobs")
+            # Move to the next batch
+            self.current_batch_id += 1
+            self.current_batch_completed = 0
+        
         bt.logging.info(f"Marked job {job_id} as completed. {len(self.pending_jobs)} jobs remaining in queue.")
+        bt.logging.info(f"Completed {self.current_batch_completed}/{self.queue_size} jobs in batch {self.current_batch_id}")
         self._save_queue()
     
     def should_fetch_new_jobs(self) -> bool:
@@ -136,15 +156,20 @@ class JobQueue:
         Determine if new jobs should be fetched.
         
         Returns:
-            True if the queue needs more jobs and we've completed at least 100 jobs, False otherwise
+            True if the current batch is complete or the queue is empty, False otherwise
         """
-        # Only fetch new jobs if we've completed at least 100 jobs or the queue is empty
-        if len(self.completed_job_ids) < 100:
-            # We haven't completed 100 jobs yet, so only fetch if queue is empty
-            return len(self.pending_jobs) == 0
-        else:
-            # We've completed at least 100 jobs, so fetch when queue is below capacity
-            return len(self.pending_jobs) < self.queue_size
+        # Only fetch new jobs if:
+        # 1. The queue is completely empty, OR
+        # 2. We've completed all jobs in the current batch (100 jobs)
+        if len(self.pending_jobs) == 0:
+            return True
+        
+        # If we have pending jobs but haven't completed the current batch yet, don't fetch new jobs
+        if self.current_batch_completed < self.queue_size:
+            return False
+            
+        # If we've completed the current batch, we can fetch new jobs
+        return True
     
     def get_queue_status(self) -> Dict[str, Any]:
         """
@@ -153,11 +178,12 @@ class JobQueue:
         Returns:
             Dictionary with queue statistics
         """
-        completed_count = len(self.completed_job_ids)
         return {
             'pending_jobs_count': len(self.pending_jobs),
-            'completed_jobs_count': completed_count,
+            'completed_jobs_count': len(self.completed_job_ids),
             'queue_capacity': self.queue_size,
-            'completion_progress': f"{completed_count}/100 jobs completed",
-            'can_fetch_new_jobs': completed_count >= 100 or len(self.pending_jobs) == 0
+            'current_batch_id': self.current_batch_id,
+            'current_batch_completed': self.current_batch_completed,
+            'batch_progress': f"{self.current_batch_completed}/{self.queue_size} jobs completed in batch {self.current_batch_id}",
+            'can_fetch_new_jobs': self.should_fetch_new_jobs()
         } 

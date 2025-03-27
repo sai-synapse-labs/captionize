@@ -75,6 +75,7 @@ class Validator(BaseValidatorNeuron):
             bt.logging.info("Fetching new jobs to fill the queue")
             jobs_data = generate_synthetic_jobs()
             self.job_queue.add_jobs(jobs_data)
+            bt.logging.info(f"Starting new batch {self.job_queue.current_batch_id}")
         
         # Get the next job from the queue
         job = self.job_queue.get_next_job()
@@ -130,10 +131,10 @@ class Validator(BaseValidatorNeuron):
         # Mark the job as completed
         self.job_queue.mark_job_completed(job.get("job_id"))
         
-        # Log queue status with completion progress
+        # Log queue status with batch progress
         queue_status = self.job_queue.get_queue_status()
         bt.logging.info(f"Job queue status: {queue_status}")
-        bt.logging.info(f"Completed {len(self.job_queue.completed_job_ids)}/100 jobs before fetching new batch")
+        bt.logging.info(f"Batch progress: {queue_status['batch_progress']}")
         
         return synapse
     
