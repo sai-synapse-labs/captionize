@@ -70,11 +70,11 @@ class Validator(BaseValidatorNeuron):
         miner_uids = get_random_uids(self, k=min(self.config.neuron.sample_size, len(self.metagraph.uids)))
         bt.logging.debug(f"Miner UIDs: {miner_uids}")
         
-        # Check if we need to fetch new jobs
+         # Check if we need to fetch new jobs
         if self.job_queue.should_fetch_new_jobs():
-            bt.logging.info("Fetching new jobs to fill the queue")
+            bt.logging.info(f"Batch {self.job_queue.current_batch_id} completed. Fetching new jobs for batch {self.job_queue.current_batch_id + 1}")
             jobs_data = generate_synthetic_jobs()
-            
+        
             # Make sure we have jobs to add
             if jobs_data and len(jobs_data) > 0:
                 self.job_queue.add_jobs(jobs_data)

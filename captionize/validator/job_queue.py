@@ -161,7 +161,12 @@ class JobQueue:
             self.miner_completed_jobs[miner_hotkey] = set()
         
         self.miner_completed_jobs[miner_hotkey].add(job_id)
-        bt.logging.debug(f"Miner {miner_hotkey} completed job {job_id}")
+        
+        # Log miner completion statistics
+        total_miners = len(self.miner_completed_jobs)
+        total_completions = sum(len(jobs) for jobs in self.miner_completed_jobs.values())
+        bt.logging.debug(f"Miner {miner_hotkey} completed job {job_id}. Total: {total_miners} miners, {total_completions} completions")
+        
         self._save_queue()
     
     def mark_job_completed(self, job_id: str):
@@ -195,34 +200,37 @@ class JobQueue:
         bt.logging.info(f"Completed {self.current_batch_completed}/{self.queue_size} jobs in batch {self.current_batch_id}")
         self._save_queue()
     
-    def should_fetch_new_jobs(self) -> bool:
+    def should_fetch_new_jobs(self):
         """
-        Determine if new jobs should be fetched.
+        Determine if we should fetch new jobs.
         
         Returns:
-            True if the current batch is complete or the queue is empty, False otherwise
+            bool: True if we should fetch new jobs, False otherwise
         """
         # Only fetch new jobs if:
-        # 1. The queue is completely empty, OR
-        # 2. We've completed all jobs in the current batch (100 jobs)
-        if len(self.pending_jobs) == 0:
-            return True
+        # 1. The queue is completely empty AND
+        # 2. We've completed all jobs in the current batch
         
-        # If we have pending jobs but haven't completed the current batch yet, don't fetch new jobs
-        if self.current_batch_completed < self.queue_size:
+        queue_empty = len(self.pending_jobs) == 0
+        batch_complete = self.current_batch_completed >= self.queue_size
+        
+        # If we have no pending jobs but still have jobs in the current batch that 
+        # haven't been completed, we should NOT fetch new jobs yet
+        if queue_empty and not batch_complete:
+            bt.logging.info(f"Queue is empty but batch {self.current_batch_id} is not complete yet. "
+                            f"Completed {self.current_batch_completed}/{self.queue_size} jobs.")
             return False
-            
-        # If we've completed the current batch, we can fetch new jobs
-        return True
+        
+        return queue_empty and batch_complete
     
-    def get_queue_status(self) -> Dict[str, Any]:
+    def get_queue_status(self):
         """
         Get the current status of the job queue.
         
         Returns:
-            Dictionary with queue statistics
+            dict: A dictionary with queue status information
         """
-        # Count how many miners have completed jobs
+        # Calculate miner statistics
         miners_with_completions = len(self.miner_completed_jobs)
         total_miner_completions = sum(len(jobs) for jobs in self.miner_completed_jobs.values())
         
