@@ -63,17 +63,24 @@ class JobQueue:
         if self.queue_file.exists():
             try:
                 with open(self.queue_file, 'r') as f:
-                    data = json.load(f)
-                    self.pending_jobs = data.get('pending_jobs', [])
-                    self.completed_job_ids = set(data.get('completed_job_ids', []))
-                    self.current_batch_id = data.get('current_batch_id', 0)
-                    self.current_batch_completed = data.get('current_batch_completed', 0)
-                    self.current_batch_jobs = data.get('current_batch_jobs', [])
-                    self.miner_completed_jobs = data.get('miner_completed_jobs', {})
-                bt.logging.info(f"Loaded job queue with {len(self.pending_jobs)} pending jobs and {len(self.completed_job_ids)} completed jobs")
-                bt.logging.info(f"Current batch: {self.current_batch_id}, completed in batch: {self.current_batch_completed}/{len(self.current_batch_jobs)}")
+                    queue_data = json.load(f)
+                
+                self.pending_jobs = queue_data.get('pending_jobs', [])
+                # Convert list back to set
+                self.completed_job_ids = set(queue_data.get('completed_job_ids', []))
+                self.current_batch_id = queue_data.get('current_batch_id', 0)
+                self.current_batch_completed = queue_data.get('current_batch_completed', 0)
+                self.current_batch_jobs = queue_data.get('current_batch_jobs', [])
+                
+                # Convert dict of lists back to dict of sets
+                miner_jobs = queue_data.get('miner_completed_jobs', {})
+                self.miner_completed_jobs = {k: set(v) for k, v in miner_jobs.items()}
+                
+                bt.logging.info(f"Loaded job queue with {len(self.pending_jobs)} pending jobs")
+                bt.logging.info(f"Current batch: {self.current_batch_id}, completed: {self.current_batch_completed}/{self.queue_size}")
             except Exception as e:
-                bt.logging.warning(f"Error loading job queue: {e}. Starting with empty queue.")
+                bt.logging.error(f"Error loading job queue: {e}")
+                # Initialize with empty values
                 self.pending_jobs = []
                 self.completed_job_ids = set()
                 self.current_batch_id = 0
@@ -84,18 +91,24 @@ class JobQueue:
             bt.logging.info("No existing job queue found. Starting with empty queue.")
     
     def _save_queue(self):
-        """Save the current job queue to disk."""
+        """Save the job queue to disk."""
         try:
+            # Create directory if it doesn't exist
+            self.queue_file.parent.mkdir(parents=True, exist_ok=True)
+            
+            # Convert sets to lists for JSON serialization
+            queue_data = {
+                'pending_jobs': self.pending_jobs,
+                'completed_job_ids': list(self.completed_job_ids),  # Convert set to list
+                'current_batch_id': self.current_batch_id,
+                'current_batch_completed': self.current_batch_completed,
+                'current_batch_jobs': self.current_batch_jobs,
+                # Convert dict of sets to dict of lists
+                'miner_completed_jobs': {k: list(v) for k, v in self.miner_completed_jobs.items()}
+            }
+            
             with open(self.queue_file, 'w') as f:
-                json.dump({
-                    'pending_jobs': self.pending_jobs,
-                    'completed_job_ids': list(self.completed_job_ids),
-                    'current_batch_id': self.current_batch_id,
-                    'current_batch_completed': self.current_batch_completed,
-                    'current_batch_jobs': list(self.current_batch_jobs),
-                    'miner_completed_jobs': self.miner_completed_jobs,
-                    'updated_at': datetime.now().isoformat()
-                }, f, indent=2)
+                json.dump(queue_data, f)
             bt.logging.debug("Job queue saved to disk")
         except Exception as e:
             bt.logging.error(f"Error saving job queue: {e}")
