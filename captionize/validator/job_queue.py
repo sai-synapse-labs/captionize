@@ -113,23 +113,26 @@ class JobQueue:
         except Exception as e:
             bt.logging.error(f"Error saving job queue: {e}")
     
-    def add_jobs(self, jobs: List[Dict[str, Any]]):
+    def add_jobs(self, jobs_data: List[Dict]):
         """
         Add new jobs to the queue.
         
         Args:
-            jobs: List of job dictionaries to add
+            jobs_data: List of job data dictionaries
         """
-        # Filter out jobs that are already completed
-        new_jobs = [job for job in jobs if job.get('job_id') not in self.completed_job_ids]
+        # Only add jobs if we have space
+        available_space = self.queue_size - len(self.pending_jobs)
+        jobs_to_add = jobs_data[:available_space]
         
-        # Add new jobs to the pending queue
-        self.pending_jobs.extend(new_jobs)
+        # Add jobs to the queue
+        self.pending_jobs.extend(jobs_to_add)
         
-        # Track jobs in the current batch
-        self.current_batch_jobs.extend([job.get('job_id') for job in new_jobs])
+        # Track which jobs belong to the current batch
+        job_ids = [job.get('job_id') for job in jobs_to_add]
+        self.current_batch_jobs.extend(job_ids)
         
-        bt.logging.info(f"Added {len(new_jobs)} new jobs to the queue")
+        bt.logging.info(f"Added {len(jobs_to_add)} jobs to the queue for batch {self.current_batch_id}")
+        bt.logging.info(f"Current batch {self.current_batch_id} has {len(self.current_batch_jobs)} tracked jobs")
         self._save_queue()
         
         # If we just added jobs to an empty queue, reset the batch counter
@@ -195,6 +198,7 @@ class JobQueue:
             self.current_batch_jobs = []
             # Reset miner completion tracking for the new batch
             self.miner_completed_jobs = {}
+            bt.logging.info(f"Moving to batch {self.current_batch_id}")
         
         bt.logging.info(f"Marked job {job_id} as completed. {len(self.pending_jobs)} jobs remaining in queue.")
         bt.logging.info(f"Completed {self.current_batch_completed}/{self.queue_size} jobs in batch {self.current_batch_id}")
@@ -207,21 +211,31 @@ class JobQueue:
         Returns:
             bool: True if we should fetch new jobs, False otherwise
         """
-        # Special case: If we're in batch 0 with no jobs and no completions,
-        # we need to fetch the initial batch of jobs
-        if self.current_batch_id == 0 and len(self.pending_jobs) == 0 and self.current_batch_completed == 0:
-            bt.logging.info("Initial batch setup: Need to fetch first batch of jobs")
-            return True
+        # Case 1: If we're in any batch with an empty queue, we need to fetch jobs
+        if len(self.pending_jobs) == 0:
+            # If we're in batch 0 with no completions, this is initial setup
+            if self.current_batch_id == 0 and self.current_batch_completed == 0:
+                bt.logging.info("Initial batch setup: Need to fetch first batch of jobs")
+                return True
+            
+            # If we're in a batch > 0 with no completions, we need to fetch jobs for this new batch
+            if self.current_batch_id > 0 and self.current_batch_completed == 0:
+                bt.logging.info(f"New batch {self.current_batch_id} setup: Need to fetch jobs for new batch")
+                return True
+            
+            # If we're in a batch with some completions but empty queue, we need more jobs
+            if self.current_batch_completed > 0 and self.current_batch_completed < self.queue_size:
+                bt.logging.info(f"Batch {self.current_batch_id} in progress: Queue empty, need more jobs. "
+                               f"Completed {self.current_batch_completed}/{self.queue_size}")
+                return True
         
-        # Normal case: Only fetch new jobs if:
-        # 1. The queue is completely empty AND
-        # 2. We've completed all jobs in the current batch
+        # Case 2: Normal case - only fetch new jobs if current batch is complete
         queue_empty = len(self.pending_jobs) == 0
         batch_complete = self.current_batch_completed >= self.queue_size
         
         if queue_empty and not batch_complete:
             bt.logging.info(f"Queue is empty but batch {self.current_batch_id} is not complete yet. "
-                            f"Completed {self.current_batch_completed}/{self.queue_size} jobs.")
+                           f"Completed {self.current_batch_completed}/{self.queue_size} jobs.")
             return False
         
         return queue_empty and batch_complete
@@ -255,9 +269,13 @@ class JobQueue:
         Reset the current batch if it appears to be stuck.
         This is a safety mechanism to prevent the validator from getting stuck.
         """
-        if self.current_batch_id == 0 and len(self.pending_jobs) == 0 and self.current_batch_completed == 0:
-            bt.logging.warning("Detected stuck state. Resetting batch tracking.")
-            self.current_batch_id = 0
+        # Case 1: Empty queue with batch > 0 and no completions for a long time
+        if (self.current_batch_id > 0 and 
+            len(self.pending_jobs) == 0 and 
+            self.current_batch_completed == 0):
+            
+            bt.logging.warning(f"Detected stuck state in batch {self.current_batch_id}. Resetting batch tracking.")
+            # Keep the batch ID but reset other tracking
             self.current_batch_completed = 0
             self.current_batch_jobs = []
             self.completed_job_ids = set()

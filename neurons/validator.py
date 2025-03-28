@@ -66,7 +66,7 @@ class Validator(BaseValidatorNeuron):
           6. Update miner scores.
           7. Mark the job as completed.
         """
-        # Add this near the beginning of the forward method
+        # Check if we need to reset a stuck batch
         if self.job_queue.reset_batch_if_stuck():
             bt.logging.info("Reset batch tracking due to stuck state")
         
@@ -82,32 +82,17 @@ class Validator(BaseValidatorNeuron):
             # Make sure we have jobs to add
             if jobs_data and len(jobs_data) > 0:
                 self.job_queue.add_jobs(jobs_data)
-                bt.logging.info(f"Added {len(jobs_data)} jobs to the queue")
+                bt.logging.info(f"Added {len(jobs_data)} jobs to the queue for batch {self.job_queue.current_batch_id}")
             else:
                 bt.logging.error("Failed to generate new jobs")
         
         # Get the next job from the queue
         job = self.job_queue.get_next_job()
         if job is None:
-            # If we're in batch 0 with no completions, we need to initialize the first batch
-            if self.job_queue.current_batch_id == 0 and self.job_queue.current_batch_completed == 0:
-                bt.logging.info("Initializing first batch of jobs")
-                jobs_data = generate_synthetic_jobs()
-                if jobs_data and len(jobs_data) > 0:
-                    self.job_queue.add_jobs(jobs_data)
-                    # Try to get a job again
-                    job = self.job_queue.get_next_job()
-                    if job is None:
-                        bt.logging.error("Still no job available after initialization.")
-                        return
-                else:
-                    bt.logging.error("Failed to generate initial jobs")
-                    return
-            else:
-                bt.logging.info(f"No job available in the queue. Waiting for batch completion. "
-                              f"Batch {self.job_queue.current_batch_id}: "
-                              f"{self.job_queue.current_batch_completed}/{self.job_queue.queue_size} completed")
-                return
+            bt.logging.info(f"No job available in the queue. Waiting for batch completion. "
+                          f"Batch {self.job_queue.current_batch_id}: "
+                          f"{self.job_queue.current_batch_completed}/{self.job_queue.queue_size} completed")
+            return
         
         if not isinstance(job, dict):
             bt.logging.error("Selected job is not a dictionary. Received: {}".format(type(job)))
