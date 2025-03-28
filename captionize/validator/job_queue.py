@@ -207,15 +207,18 @@ class JobQueue:
         Returns:
             bool: True if we should fetch new jobs, False otherwise
         """
-        # Only fetch new jobs if:
+        # Special case: If we're in batch 0 with no jobs and no completions,
+        # we need to fetch the initial batch of jobs
+        if self.current_batch_id == 0 and len(self.pending_jobs) == 0 and self.current_batch_completed == 0:
+            bt.logging.info("Initial batch setup: Need to fetch first batch of jobs")
+            return True
+        
+        # Normal case: Only fetch new jobs if:
         # 1. The queue is completely empty AND
         # 2. We've completed all jobs in the current batch
-        
         queue_empty = len(self.pending_jobs) == 0
         batch_complete = self.current_batch_completed >= self.queue_size
         
-        # If we have no pending jobs but still have jobs in the current batch that 
-        # haven't been completed, we should NOT fetch new jobs yet
         if queue_empty and not batch_complete:
             bt.logging.info(f"Queue is empty but batch {self.current_batch_id} is not complete yet. "
                             f"Completed {self.current_batch_completed}/{self.queue_size} jobs.")
@@ -245,4 +248,20 @@ class JobQueue:
             'miners_with_completions': miners_with_completions,
             'total_miner_completions': total_miner_completions,
             'can_fetch_new_jobs': self.should_fetch_new_jobs()
-        } 
+        }
+    
+    def reset_batch_if_stuck(self):
+        """
+        Reset the current batch if it appears to be stuck.
+        This is a safety mechanism to prevent the validator from getting stuck.
+        """
+        if self.current_batch_id == 0 and len(self.pending_jobs) == 0 and self.current_batch_completed == 0:
+            bt.logging.warning("Detected stuck state. Resetting batch tracking.")
+            self.current_batch_id = 0
+            self.current_batch_completed = 0
+            self.current_batch_jobs = []
+            self.completed_job_ids = set()
+            self.miner_completed_jobs = {}
+            self._save_queue()
+            return True
+        return False 
