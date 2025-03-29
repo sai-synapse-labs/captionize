@@ -18,4 +18,11 @@ Ex: THEY ATTACKED AND REMOVED THE VOICES OF RESISTANCE FROM OUR RADIO AND STEVIE
  - [ ]work on  reward function based  **Time of the dialouge**(should done with manual validation).
  - [ ] **PHASE 2:** Dataset to contain more data and more diverse data (bg noise,bg music, voice overlays, etc)
  - [ ] Have our own MLmodel for transcription and gender prediction (combined)
+ 
 
+# Going tasks
+
+-[x]make sure first 100 tasks are done before feteching new jobs
+-[ ]to check the reward function and to normalise the text output from ASR
+-[ ]check set_weights function
+-[ ]look into save_state function

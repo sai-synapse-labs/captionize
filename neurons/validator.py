@@ -2,14 +2,14 @@
 # Copyright © 2023 Yuma Rao
 
 # Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated
-# documentation files (the “Software”), to deal in the Software without restriction, including without limitation
+# documentation files (the "Software"), to deal in the Software without restriction, including without limitation
 # the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software,
 # and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
 
 # The above copyright notice and this permission notice shall be included in all copies or substantial portions of
 # the Software.
 
-# THE SOFTWARE IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO
 # THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
 # THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
 # OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
@@ -25,6 +25,7 @@ from captionize.base.validator import BaseValidatorNeuron
 from captionize.validator.generate import generate_synthetic_jobs
 from captionize.validator.reward import get_rewards
 from captionize.utils.uids import get_random_uids
+from captionize.validator.job_queue import JobQueue  # Import the new JobQueue class
 import torch
 
 class Validator(BaseValidatorNeuron):
@@ -47,6 +48,10 @@ class Validator(BaseValidatorNeuron):
         self.data_dir = './data/audio/'
         if not os.path.exists(self.data_dir):
             os.makedirs(self.data_dir)
+            
+        # Initialize the job queue
+        self.job_queue = JobQueue(queue_size=100)
+        bt.logging.info(f"Job queue initialized: {self.job_queue.get_queue_status()}")
 
     async def forward(self):
         """
@@ -54,32 +59,46 @@ class Validator(BaseValidatorNeuron):
         
         Steps:
           1. Retrieve random miner UIDs.
-          2. Generate a synthetic caption job using VoxPopuli.
-          3. Create a CaptionSynapse with the generated job data.
+          2. Get a job from the queue or generate new jobs if needed.
+          3. Create a CaptionSynapse with the job data.
           4. Query miners with this synapse.
           5. Score the responses.
           6. Update miner scores.
+          7. Mark the job as completed.
         """
-        # Get random miner UIDs from the metagraph (helper function)
-        # miner_uids = get_random_uids(self, k=min(self.config.neuron.sample_size, self.metagraph.n.item()))
+        # Check if we need to reset a stuck batch
+        if self.job_queue.reset_batch_if_stuck():
+            bt.logging.info("Reset batch tracking due to stuck state")
+        
+        # Get random miner UIDs from the metagraph
         miner_uids = get_random_uids(self, k=min(self.config.neuron.sample_size, len(self.metagraph.uids)))
         bt.logging.debug(f"Miner UIDs: {miner_uids}")
         
-        # Generate a synthetic caption job from VoxPopuli
-        jobs_data = generate_synthetic_jobs()
-        bt.logging.debug(f"Generated job: {jobs_data}")
+        # Check if we need to fetch new jobs
+        if self.job_queue.should_fetch_new_jobs():
+            bt.logging.info(f"Fetching new jobs for batch {self.job_queue.current_batch_id}")
+            jobs_data = generate_synthetic_jobs()
+            
+            # Make sure we have jobs to add
+            if jobs_data and len(jobs_data) > 0:
+                self.job_queue.add_jobs(jobs_data)
+                bt.logging.info(f"Added {len(jobs_data)} jobs to the queue for batch {self.job_queue.current_batch_id}")
+            else:
+                bt.logging.error("Failed to generate new jobs")
         
-        # Select one job randomly.
-        job = random.choice(jobs_data) if jobs_data else None
+        # Get the next job from the queue
+        job = self.job_queue.get_next_job()
         if job is None:
-            bt.logging.error("No job generated.")
+            bt.logging.info(f"No job available in the queue. Waiting for batch completion. "
+                          f"Batch {self.job_queue.current_batch_id}: "
+                          f"{self.job_queue.current_batch_completed}/{self.job_queue.queue_size} completed")
             return
         
         if not isinstance(job, dict):
             bt.logging.error("Selected job is not a dictionary. Received: {}".format(type(job)))
             return
 
-        # Create ground-truth labels (here as a list of one segment with dummy timing)
+        # Create ground-truth labels
         labels = [
             { 
                 "start_time": 0.0, 
@@ -89,7 +108,7 @@ class Validator(BaseValidatorNeuron):
             }
         ]
         
-        # Create a CaptionSynapse with the job data.
+        # Create a CaptionSynapse with the job data
         synapse = captionize.protocol.CaptionSynapse(
             job_id=job.get("job_id"),
             base64_audio=job.get("audio"),
@@ -98,7 +117,7 @@ class Validator(BaseValidatorNeuron):
             miner_state="in_progress"
         )
         
-        # Query miners with the synapse. Assume dendrite.query returns a list of responses.
+        # Query miners with the synapse
         responses = await self.dendrite.forward(
             axons=[self.metagraph.axons[uid] for uid in miner_uids],
             synapse=synapse,
@@ -109,19 +128,50 @@ class Validator(BaseValidatorNeuron):
         if responses is None:
             responses = []
         
-        bt.logging.info(f"Received responses: {responses}")
+        bt.logging.info(f"Received {len(responses)} responses for job {job.get('job_id')}")
+        
+        # Track which miners completed this job
+        for i, response in enumerate(responses):
+            if hasattr(response, 'job_status') and response.job_status == "done":
+                miner_hotkey = self.metagraph.hotkeys[miner_uids[i]]
+                self.job_queue.mark_job_completed_by_miner(job.get("job_id"), miner_hotkey)
         
         # Compute rewards for the miner responses
         rewards = get_rewards(self, labels=labels, responses=responses)
         bt.logging.info(f"Scored responses: {rewards}")
         
-        # Update miner scores using the computed rewards (update_scores must be implemented in BaseValidatorNeuron)
+        # Update miner scores using the computed rewards
         self.update_scores(rewards, miner_uids)
         
         bt.logging.info(f"Querying {len(miner_uids)} miners with job_id: {job.get('job_id')}")
         
+        # Mark the job as completed
+        self.job_queue.mark_job_completed(job.get("job_id"))
+        
+        # Log queue status with batch progress
+        queue_status = self.job_queue.get_queue_status()
+        bt.logging.info(f"Job queue status: {queue_status}")
+        bt.logging.info(f"Batch progress: {queue_status['batch_progress']}")
+        
         return synapse
+    
+    def save_state(self):
+        """
+        Override the base validator's save_state method to save our custom state.
+        """
+        bt.logging.info("Saving validator state.")
 
+        # Save the state of the validator to file.
+        torch.save(
+            {
+                "step": self.step,
+                "scores": self.scores,
+                "hotkeys": self.hotkeys,
+            },
+            self.config.neuron.full_path + "/state.pt",
+        )
+
+   
     def set_weights(self):
         """
         Override the base validator's set_weights method to handle tensor conversions properly.
