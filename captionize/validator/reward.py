@@ -352,7 +352,6 @@ def reward(self, labels: List[dict], response: CaptionSynapse) -> float:
     prediction_rewards = []
     wer_rewards = []
     critical_word_rewards = []
-    punctuation_rewards = []
     spelling_rewards = []
     
     for i, label in enumerate(labels):
@@ -375,36 +374,31 @@ def reward(self, labels: List[dict], response: CaptionSynapse) -> float:
             text_reward = get_text_reward(label_text_norm, pred_text_norm)
             wer_reward = get_wer_reward(label_text_norm, pred_text_norm)
             critical_reward = check_critical_words(label_text_norm, pred_text_norm)
-            punct_reward = check_punctuation(label_text, pred_text)  # Keep original case for punctuation
             spell_reward = check_spelling(label_text_norm, pred_text_norm)
             
             prediction_rewards.append(text_reward)
             wer_rewards.append(wer_reward)
             critical_word_rewards.append(critical_reward)
-            punctuation_rewards.append(punct_reward)
             spelling_rewards.append(spell_reward)
     
     # Get average rewards for each component
     avg_prediction = sum(prediction_rewards) / max(1, len(prediction_rewards))
     avg_wer = sum(wer_rewards) / max(1, len(wer_rewards))
     avg_critical = sum(critical_word_rewards) / max(1, len(critical_word_rewards))
-    avg_punctuation = sum(punctuation_rewards) / max(1, len(punctuation_rewards))
     avg_spelling = sum(spelling_rewards) / max(1, len(spelling_rewards))
     
     # Combine transcription-related rewards
-    # Adjusted weights for SpeechBrain format - increase WER and edit distance importance
+    # Adjusted weights - removed punctuation and increased spelling weight
     w_edit = 0.35    # Edit distance-based similarity
     w_wer = 0.35     # Word Error Rate
     w_critical = 0.20  # Critical words accuracy
-    w_punct = 0.05   # Punctuation accuracy
-    w_spell = 0.05   # Spelling accuracy 
+    w_spell = 0.10   # Spelling accuracy (increased from 0.05 to 0.10)
     
     # Combined transcription reward
     transcription_reward = (
         w_edit * avg_prediction +
         w_wer * avg_wer +
         w_critical * avg_critical +
-        w_punct * avg_punctuation +
         w_spell * avg_spelling
     )
     
@@ -428,7 +422,6 @@ def reward(self, labels: List[dict], response: CaptionSynapse) -> float:
     bt.logging.info(f"  Edit distance: {avg_prediction:.3f}")
     bt.logging.info(f"  WER: {avg_wer:.3f}")
     bt.logging.info(f"  Critical words: {avg_critical:.3f}")
-    bt.logging.info(f"  Punctuation: {avg_punctuation:.3f}")
     bt.logging.info(f"  Spelling: {avg_spelling:.3f}")
     bt.logging.info(f"  Gender: {gender_reward:.3f}")
     bt.logging.info(f"  Total: {total_reward:.3f}")
