@@ -20,9 +20,13 @@ Ex: THEY ATTACKED AND REMOVED THE VOICES OF RESISTANCE FROM OUR RADIO AND STEVIE
  - [ ] Have our own MLmodel for transcription and gender prediction (combined)
  
 
-# Going tasks
+# On-Going tasks
 
--[x]make sure first 100 tasks are done before feteching new jobs
--[ ]to check the reward function and to normalise the text output from ASR
--[ ]check set_weights function
--[ ]look into save_state function
+- [x]make sure first 100 tasks are done before feteching new jobs
+- [x]to check the reward function and to normalise the text output from ASR
+- [ ]check set_weights function
+- [ ]look into save_state function
+
+# Future-tasks :
+
+- [ ] To add  Punctuation metric to the reward function
