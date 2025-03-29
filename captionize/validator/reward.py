@@ -30,6 +30,7 @@ def get_text_reward(text1: str, text2: str = None) -> float:
     """
     Calculate a normalized text reward based on edit distance.
     A reward of 1.0 means a perfect match.
+    Handles case-insensitive comparison for SpeechBrain ASR output.
 
     Args:
       text1 (str): The reference transcript.
@@ -40,6 +41,11 @@ def get_text_reward(text1: str, text2: str = None) -> float:
     """
     if not text2:
         return 0.0
+    
+    # Normalize whitespace
+    text1 = ' '.join(text1.split())
+    text2 = ' '.join(text2.split())
+    
     return 1 - editdistance.eval(text1, text2) / max(len(text1), len(text2))
 
 def calculate_wer(reference: str, hypothesis: str) -> float:
@@ -83,6 +89,7 @@ def check_critical_words(reference: str, hypothesis: str) -> float:
     """
     Check if critical words in the reference are present in the hypothesis.
     Critical words are typically proper nouns, acronyms, or words in ALL CAPS.
+    Modified to handle SpeechBrain's uppercase output format.
     
     Args:
         reference (str): The ground truth text
@@ -94,17 +101,42 @@ def check_critical_words(reference: str, hypothesis: str) -> float:
     if not hypothesis or not reference:
         return 0.0
     
-    # Find words in ALL CAPS or words in parentheses in the reference
-    critical_pattern = r'\b[A-Z]{2,}\b|\(\w+\)'
-    critical_words = re.findall(critical_pattern, reference)
+    # For SpeechBrain output (which is often all caps),
+    # we need a different approach to identify critical words
     
+    # Split into words and remove punctuation
+    ref_words = re.findall(r'\b\w+\b', reference)
+    hyp_words = re.findall(r'\b\w+\b', hypothesis)
+    
+    # Consider proper nouns (words that start with capital in reference)
+    # and acronyms (words with 2+ consecutive capitals)
+    critical_words = []
+    
+    # If reference is not all uppercase, we can detect proper nouns
+    if not reference.isupper():
+        for word in ref_words:
+            # Check if it's a proper noun (starts with capital) or acronym
+            if (len(word) > 1 and word[0].isupper() and not word[1].isupper()) or \
+               re.search(r'[A-Z]{2,}', word):
+                critical_words.append(word.upper())
+    else:
+        # If reference is all uppercase (like SpeechBrain output),
+        # consider words with 4+ characters as potentially important
+        for word in ref_words:
+            if len(word) >= 4:
+                critical_words.append(word.upper())
+    
+    # If no critical words identified, return perfect score
     if not critical_words:
-        return 1.0  # No critical words to check
+        return 1.0
+    
+    # Convert hypothesis words to uppercase for comparison
+    hyp_words_upper = [word.upper() for word in hyp_words]
     
     # Count how many critical words are in the hypothesis
     correct_count = 0
     for word in critical_words:
-        if word in hypothesis:
+        if word in hyp_words_upper:
             correct_count += 1
     
     return correct_count / len(critical_words)
@@ -282,8 +314,8 @@ def get_rewards(self, labels: List[dict], responses: List[CaptionSynapse]) -> to
 def reward(self, labels: List[dict], response: CaptionSynapse) -> float:
     """
     Compute the overall reward for a miner's response to a caption task.
-    The reward combines text accuracy, WER, critical word accuracy,
-    punctuation, spelling, and gender accuracy.
+    Optimized for SpeechBrain EncoderDecoderASR output format which typically
+    produces uppercase text with minimal punctuation.
     
     Args:
       labels (List[dict]): Ground truth segments, each with "text" and "gender" fields.
@@ -335,12 +367,16 @@ def reward(self, labels: List[dict], response: CaptionSynapse) -> float:
             if not label_text or not pred_text:
                 continue
             
-            # Calculate various reward components
-            text_reward = get_text_reward(label_text, pred_text)
-            wer_reward = get_wer_reward(label_text, pred_text)
-            critical_reward = check_critical_words(label_text, pred_text)
-            punct_reward = check_punctuation(label_text, pred_text)
-            spell_reward = check_spelling(label_text, pred_text)
+            # Normalize case for comparison - SpeechBrain typically outputs uppercase
+            label_text_norm = label_text.upper()
+            pred_text_norm = pred_text.upper()
+            
+            # Calculate various reward components with case normalization
+            text_reward = get_text_reward(label_text_norm, pred_text_norm)
+            wer_reward = get_wer_reward(label_text_norm, pred_text_norm)
+            critical_reward = check_critical_words(label_text_norm, pred_text_norm)
+            punct_reward = check_punctuation(label_text, pred_text)  # Keep original case for punctuation
+            spell_reward = check_spelling(label_text_norm, pred_text_norm)
             
             prediction_rewards.append(text_reward)
             wer_rewards.append(wer_reward)
@@ -356,12 +392,12 @@ def reward(self, labels: List[dict], response: CaptionSynapse) -> float:
     avg_spelling = sum(spelling_rewards) / max(1, len(spelling_rewards))
     
     # Combine transcription-related rewards
-    # Weights for different components - edit distance now includes the 5% from time reward
-    w_edit = 0.30  # Edit distance-based similarity (increased from 0.25 to 0.30)
-    w_wer = 0.30   # Word Error Rate
-    w_critical = 0.20  # Critical words accuracye
-    w_punct = 0.10  # Punctuation accuracy
-    w_spell = 0.10  # Spelling accuracy (reduced from 0.15 to 0.10)
+    # Adjusted weights for SpeechBrain format - increase WER and edit distance importance
+    w_edit = 0.35    # Edit distance-based similarity
+    w_wer = 0.35     # Word Error Rate
+    w_critical = 0.20  # Critical words accuracy
+    w_punct = 0.05   # Punctuation accuracy
+    w_spell = 0.05   # Spelling accuracy 
     
     # Combined transcription reward
     transcription_reward = (
@@ -377,11 +413,11 @@ def reward(self, labels: List[dict], response: CaptionSynapse) -> float:
     gender_pred = getattr(response, "predicted_gender", None)
     gender_reward = get_gender_reward(gender_true, gender_pred)
     
-    # Weights for final reward calculation - removed time component
-    alpha_transcription = 0.80  # Transcription is most important (increased from 0.75 to 0.80)
-    alpha_gender = 0.20        # Gender prediction remains at 0.20
+    # Weights for final reward calculation
+    alpha_transcription = 0.80  # Transcription is most important
+    alpha_gender = 0.20        # Gender prediction
     
-    # Combine all rewards - no time reward component
+    # Combine all rewards
     total_reward = (
         alpha_transcription * transcription_reward +
         alpha_gender * gender_reward
