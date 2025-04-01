@@ -208,10 +208,7 @@ class Miner(BaseMinerNeuron):
             if synapse.dendrite.hotkey not in self.metagraph.hotkeys:
                 bt.logging.warning(f"Blacklisting unrecognized hotkey {synapse.dendrite.hotkey}")
                 return True, "Unrecognized hotkey"
-                
-            # Add verification of registration
-            if not self.metagraph.validator_permit[self.metagraph.hotkeys.index(synapse.dendrite.hotkey)]:
-                return True, "Not a registered validator"
+            
                 
             bt.logging.debug(f"Verified hotkey: {synapse.dendrite.hotkey}")
             return False, "Hotkey recognized"
