@@ -179,11 +179,9 @@ class Validator(BaseValidatorNeuron):
         """
         # Check if scores contain NaN values
         if torch.isnan(self.scores).any():
-            bt.logging.warning("Scores contain NaN values. This may be due to a lack of responses from miners, or a bug in your reward functions.")
-            return  # Early exit if scores are invalid
-
-        # Log the scores before setting weights
-        bt.logging.info(f"Setting weights with scores: {self.scores}")
+            bt.logging.warning("Scores contain NaN values. This may indicate an issue with reward calculations.")
+            # Replace NaN with zeros to prevent errors
+            self.scores = torch.nan_to_num(self.scores, 0.0)
 
         # Ensure scores is a PyTorch tensor on the correct device
         if not isinstance(self.scores, torch.Tensor):
