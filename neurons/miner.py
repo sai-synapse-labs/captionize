@@ -42,7 +42,14 @@ class Miner(BaseMinerNeuron):
     """
 
     def __init__(self, config=None):
-        super(Miner, self).__init__(config=config)
+        super().__init__(config=config)
+        
+        # Add a small delay to ensure proper synchronization
+        time.sleep(1)
+        
+        # Force sync metagraph before starting
+        self.metagraph.sync(subtensor=self.subtensor)
+        bt.logging.info(f"Synced metagraph with {len(self.metagraph.hotkeys)} hotkeys")
 
         # Determine device - prefer GPU for performance
         try:
@@ -81,116 +88,134 @@ class Miner(BaseMinerNeuron):
             bt.logging.debug(traceback.format_exc())
             raise
 
-        
-        self.metagraph.sync(subtensor=self.subtensor)
-        bt.logging.info(f"Synced metagraph with {len(self.metagraph.hotkeys)} hotkeys")
-
     async def forward(self, synapse: CaptionSynapse) -> CaptionSynapse:
         """
         Process the incoming CaptionSynapse request with GPU acceleration and fallbacks.
         """
-        bt.logging.info(f"Received request for job_id: {synapse.job_id}")
-        start_time = time.time()
-        if synapse.job_status not in ["done"]:
-            # Get or create audio file
-            if synapse.audio_path and os.path.exists(synapse.audio_path):
-                audio_file = synapse.audio_path
-            else:
-                temp_filename = f"/tmp/{uuid.uuid4()}.wav"
-                audio_bytes = base64.b64decode(synapse.base64_audio)
-                with open(temp_filename, "wb") as f:
-                    f.write(audio_bytes)
-                audio_file = temp_filename
-
-            transcript = ""
-            predicted_gender = "unknown"
-            used_device = self.device  # Start with configured device
+        try:
+            bt.logging.info(f"Received request for job_id: {synapse.job_id}")
             
-            # Process with error handling and GPU fallback
-            try:
-                # Try transcription with current device setting
-                bt.logging.debug(f"Transcribing file using {used_device}: {audio_file}")
+            # Add validation check
+            if not synapse.job_id or not (synapse.base64_audio or synapse.audio_path):
+                bt.logging.error("Invalid request: missing required fields")
+                synapse.job_status = "failed"
+                return synapse
+
+            start_time = time.time()
+            if synapse.job_status not in ["done"]:
+                # Get or create audio file
+                if synapse.audio_path and os.path.exists(synapse.audio_path):
+                    audio_file = synapse.audio_path
+                else:
+                    temp_filename = f"/tmp/{uuid.uuid4()}.wav"
+                    audio_bytes = base64.b64decode(synapse.base64_audio)
+                    with open(temp_filename, "wb") as f:
+                        f.write(audio_bytes)
+                    audio_file = temp_filename
+
+                transcript = ""
+                predicted_gender = "unknown"
+                used_device = self.device  # Start with configured device
                 
-                # Try using GPU first
-                if used_device.type == 'cuda':
-                    try:
-                        # Ensure model is on the right device
-                        self.asr_model.to(used_device)
-                        bt.logging.info(f"Starting transcription on GPU for file: {audio_file}")
-                        transcript = self.asr_model.transcribe_file(audio_file)
-                        bt.logging.info(f"Transcription completed successfully on GPU")
-                        bt.logging.debug(f"Transcription result (GPU): '{transcript}'")
-                    except Exception as gpu_err:
-                        # Fall back to CPU if GPU fails
-                        bt.logging.warning(f"GPU transcription failed, falling back to CPU: {gpu_err}")
-                        used_device = torch.device("cpu")
-                        self.asr_model.to(used_device)
+                # Process with error handling and GPU fallback
+                try:
+                    # Try transcription with current device setting
+                    bt.logging.debug(f"Transcribing file using {used_device}: {audio_file}")
+                    
+                    # Try using GPU first
+                    if used_device.type == 'cuda':
+                        try:
+                            # Ensure model is on the right device
+                            self.asr_model.to(used_device)
+                            bt.logging.info(f"Starting transcription on GPU for file: {audio_file}")
+                            transcript = self.asr_model.transcribe_file(audio_file)
+                            bt.logging.info(f"Transcription completed successfully on GPU")
+                            bt.logging.debug(f"Transcription result (GPU): '{transcript}'")
+                        except Exception as gpu_err:
+                            # Fall back to CPU if GPU fails
+                            bt.logging.warning(f"GPU transcription failed, falling back to CPU: {gpu_err}")
+                            used_device = torch.device("cpu")
+                            self.asr_model.to(used_device)
+                            bt.logging.info(f"Starting transcription on CPU for file: {audio_file}")
+                            transcript = self.asr_model.transcribe_file(audio_file)
+                            bt.logging.info(f"Transcription completed successfully on CPU")
+                            bt.logging.debug(f"Transcription result (CPU fallback): '{transcript}'")
+                    else:
+                        # Use CPU directly if that's our primary device
                         bt.logging.info(f"Starting transcription on CPU for file: {audio_file}")
                         transcript = self.asr_model.transcribe_file(audio_file)
                         bt.logging.info(f"Transcription completed successfully on CPU")
-                        bt.logging.debug(f"Transcription result (CPU fallback): '{transcript}'")
-                else:
-                    # Use CPU directly if that's our primary device
-                    bt.logging.info(f"Starting transcription on CPU for file: {audio_file}")
-                    transcript = self.asr_model.transcribe_file(audio_file)
-                    bt.logging.info(f"Transcription completed successfully on CPU")
-                    bt.logging.debug(f"Transcription result (CPU): '{transcript}'")
+                        bt.logging.debug(f"Transcription result (CPU): '{transcript}'")
                     
-                # Try gender prediction on same device as successful transcription
-                try:
-                    bt.logging.debug(f"Predicting gender on {used_device} from file: {audio_file}")
-                    # Move gender model to same device as successful transcription
-                    self.gender_model.to(used_device)
-                    if hasattr(self.gender_model, 'device'):
-                        # Some models have internal device tracking
-                        self.gender_model.device = used_device
-                    predicted_gender = self.gender_model.predict(audio_file, device=used_device)
-                    bt.logging.debug(f"Gender prediction result: {predicted_gender}")
-                except Exception as e:
-                    # Fall back to CPU for gender prediction if needed
-                    bt.logging.warning(f"Gender prediction on {used_device} failed: {e}")
-                    if used_device.type == 'cuda':
-                        bt.logging.info("Trying gender prediction on CPU instead")
-                        try:
-                            self.gender_model.to('cpu')
-                            if hasattr(self.gender_model, 'device'):
-                                self.gender_model.device = torch.device('cpu')
-                            predicted_gender = self.gender_model.predict(audio_file, device='cpu')
-                            bt.logging.debug(f"Gender prediction result (CPU fallback): {predicted_gender}")
-                        except Exception as e2:
-                            bt.logging.error(f"CPU fallback gender prediction also failed: {e2}")
+                    # Try gender prediction on same device as successful transcription
+                    try:
+                        bt.logging.debug(f"Predicting gender on {used_device} from file: {audio_file}")
+                        # Move gender model to same device as successful transcription
+                        self.gender_model.to(used_device)
+                        if hasattr(self.gender_model, 'device'):
+                            # Some models have internal device tracking
+                            self.gender_model.device = used_device
+                        predicted_gender = self.gender_model.predict(audio_file, device=used_device)
+                        bt.logging.debug(f"Gender prediction result: {predicted_gender}")
+                    except Exception as e:
+                        # Fall back to CPU for gender prediction if needed
+                        bt.logging.warning(f"Gender prediction on {used_device} failed: {e}")
+                        if used_device.type == 'cuda':
+                            bt.logging.info("Trying gender prediction on CPU instead")
+                            try:
+                                self.gender_model.to('cpu')
+                                if hasattr(self.gender_model, 'device'):
+                                    self.gender_model.device = torch.device('cpu')
+                                predicted_gender = self.gender_model.predict(audio_file, device='cpu')
+                                bt.logging.debug(f"Gender prediction result (CPU fallback): {predicted_gender}")
+                            except Exception as e2:
+                                bt.logging.error(f"CPU fallback gender prediction also failed: {e2}")
+                                predicted_gender = "unknown"
+                        else:
                             predicted_gender = "unknown"
-                    else:
-                        predicted_gender = "unknown"
                     
-            except Exception as e:
-                bt.logging.error(f"Error during processing: {e}")
-                import traceback
-                bt.logging.debug(traceback.format_exc())
-                synapse.job_status = "failed"
+                except Exception as e:
+                    bt.logging.error(f"Error during processing: {e}")
+                    import traceback
+                    bt.logging.debug(traceback.format_exc())
+                    synapse.job_status = "failed"
 
-            # Cleanup temp file
-            if (not synapse.audio_path) and os.path.exists(audio_file):
-                os.remove(audio_file)
+                # Cleanup temp file
+                if (not synapse.audio_path) and os.path.exists(audio_file):
+                    os.remove(audio_file)
 
-            # Update synapse with results
-            synapse.segments = [{"text": transcript}]
-            synapse.predicted_gender = predicted_gender
-            synapse.time_elapsed = time.time() - start_time
-            synapse.job_status = "done"
+                # Update synapse with results
+                synapse.segments = [{"text": transcript}]
+                synapse.predicted_gender = predicted_gender
+                synapse.time_elapsed = time.time() - start_time
+                synapse.job_status = "done"
+                
+            return synapse
+
+        except Exception as e:
+            bt.logging.error(f"Error processing request: {str(e)}")
+            synapse.job_status = "failed"
+            import traceback
+            bt.logging.debug(traceback.format_exc())
             
         return synapse
 
     async def blacklist(self, synapse: CaptionSynapse) -> typing.Tuple[bool, str]:
         """
-        Determine if a request should be blacklisted.
-        For now, this simple logic blacklists unrecognized hotkeys.
+        Modified blacklist function with better error handling
         """
-        if synapse.dendrite.hotkey not in self.metagraph.hotkeys:
-            bt.logging.trace(f"Blacklisting unrecognized hotkey {synapse.dendrite.hotkey}")
-            return True, "Unrecognized hotkey"
-        bt.logging.trace(f"Hotkey recognized: {synapse.dendrite.hotkey}")
-        return False, "Hotkey recognized"
+        try:
+            if synapse.dendrite.hotkey not in self.metagraph.hotkeys:
+                bt.logging.warning(f"Blacklisting unrecognized hotkey {synapse.dendrite.hotkey}")
+                return True, "Unrecognized hotkey"
+            
+                
+            bt.logging.debug(f"Verified hotkey: {synapse.dendrite.hotkey}")
+            return False, "Hotkey recognized"
+            
+        except Exception as e:
+            bt.logging.error(f"Error in blacklist function: {str(e)}")
+            return True, f"Error during verification: {str(e)}"
 
     async def priority(self, synapse: CaptionSynapse) -> float:
         """

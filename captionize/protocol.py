@@ -18,6 +18,7 @@
 
 import bittensor as bt
 from typing import Optional, List, ClassVar, Dict
+from pydantic import Field
 
 
 class CaptionSynapse(bt.Synapse):
@@ -42,7 +43,7 @@ class CaptionSynapse(bt.Synapse):
     language: Optional[str] = "en"
     segments: Optional[List[dict]] = None    # Each dict: {"start_time": float, "end_time": float, "text": str, "gender": str}
     job_status: Optional[str] = None
-    time_elapsed: Optional[float] = 0.0      # Changed from ClassVar to regular field
+    time_elapsed: Optional[float] = Field(default=0.0)  # Use Field with explicit typing
     predicted_gender: Optional[str] = None    # Added for storing gender prediction
 
     def deserialize(self) -> "CaptionSynapse":
@@ -59,3 +60,9 @@ class CaptionSynapse(bt.Synapse):
         if self.segments is not None:
             bt.logging.debug(f"Segments: {self.segments}")
         return self
+
+    class Config:
+        arbitrary_types_allowed = True
+        json_encoders = {
+            # Add any custom encoders if needed
+        }

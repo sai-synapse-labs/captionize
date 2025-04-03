@@ -182,7 +182,7 @@ class Validator(BaseValidatorNeuron):
             bt.logging.warning("Scores contain NaN values. This may indicate an issue with reward calculations.")
             # Replace NaN with zeros to prevent errors
             self.scores = torch.nan_to_num(self.scores, 0.0)
-        
+
         # Ensure scores is a PyTorch tensor on the correct device
         if not isinstance(self.scores, torch.Tensor):
             self.scores = torch.tensor(self.scores, dtype=torch.float32).to(self.device)
